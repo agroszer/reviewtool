@@ -27,6 +27,11 @@ class VCSBackend(ABC):
         """Return True if the VCS supports amending the last commit."""
 
     @property
+    def supports_push(self) -> bool:
+        """Return True if the VCS supports pushing commits to a remote."""
+        return False
+
+    @property
     def amend_mode(self) -> bool:
         """Return True if amend mode is currently active."""
         return False
@@ -118,6 +123,10 @@ class VCSBackend(ABC):
         amend: bool = False,
     ) -> str:
         """Create a commit and return command output."""
+
+    def push(self) -> str:
+        """Push commits to the remote repository and return command output."""
+        raise VCSError(f"{self.name} does not support push.")
 
     @abstractmethod
     def get_last_commit_message(self) -> str:

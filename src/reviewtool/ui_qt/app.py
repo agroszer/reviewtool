@@ -239,6 +239,11 @@ class MainWindow(QMainWindow):
         self.btn_commit = QPushButton("Commit")
         self.btn_commit.clicked.connect(self._on_commit)
         c_btns.addWidget(self.btn_commit)
+
+        self.btn_push = QPushButton("Push")
+        self.btn_push.setVisible(self.session.vcs.supports_push)
+        self.btn_push.clicked.connect(self._on_push)
+        c_btns.addWidget(self.btn_push)
         c_layout.addLayout(c_btns)
         self.left_splitter.addWidget(commit_box)
 
@@ -878,6 +883,16 @@ class MainWindow(QMainWindow):
         self._refresh_diff_pane()
         self.status_bar.showMessage(
             f"Committed successfully: {output.splitlines()[0] if output else 'OK'}"
+        )
+
+    def _on_push(self) -> None:
+        try:
+            output = self.session.push()
+        except VCSError as exc:
+            QMessageBox.warning(self, "Push Failed", str(exc))
+            return
+        self.status_bar.showMessage(
+            f"Pushed successfully: {output.splitlines()[0] if output else 'OK'}"
         )
 
     def _run_external_tool(self, tool: ToolSpec) -> None:

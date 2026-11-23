@@ -428,6 +428,8 @@ class ReviewTuiApp(App[int]):
                         yield Checkbox("Amend", id="chk_amend")
                     yield Button("Sign Off", id="btn_signoff")
                     yield Button("Commit", id="btn_commit", variant="success")
+                    if self.session.vcs.supports_push:
+                        yield Button("Push", id="btn_push", variant="primary")
             yield PaneSplitter()
             with Vertical(id="right_pane"):
                 yield Label(
@@ -661,6 +663,19 @@ class ReviewTuiApp(App[int]):
                 commit_input.text = f"{cur_text}{sep}{line}\n"
         elif btn_id == "btn_commit":
             self._perform_commit()
+        elif btn_id == "btn_push":
+            self._perform_push()
+
+    def _perform_push(self) -> None:
+        try:
+            out = self.session.push()
+        except VCSError as exc:
+            self.notify(str(exc), severity="error")
+            return
+        self.notify(
+            f"Pushed: {out.splitlines()[0] if out else 'OK'}",
+            severity="information",
+        )
 
     def _perform_commit(self) -> None:
         commit_input = self.query_one("#commit_input", TextArea)

@@ -32,6 +32,10 @@ class GitBackend(VCSBackend):
         return True
 
     @property
+    def supports_push(self) -> bool:
+        return True
+
+    @property
     def amend_mode(self) -> bool:
         return self._amend
 
@@ -346,6 +350,10 @@ class GitBackend(VCSBackend):
             args.append("--amend")
         proc = self._run_git(args)
         return proc.stdout.strip()
+
+    def push(self) -> str:
+        proc = self._run_git(["push"])
+        return (proc.stdout.strip() or proc.stderr.strip() or "OK")
 
     def get_last_commit_message(self) -> str:
         if not self._has_head():

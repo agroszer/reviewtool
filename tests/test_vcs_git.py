@@ -154,3 +154,42 @@ def test_git_amend_populates_staged_from_prev_commit(tmp_path: Path) -> None:
     session.set_amend(False)
     assert session.staged == []
 
+
+def test_git_push_to_bare_remote(tmp_path: Path) -> None:
+    remote_dir = tmp_path / "remote.git"
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    subprocess.run(
+        ["git", "init", "--bare", str(remote_dir)],
+        check=True,
+        capture_output=True,
+    )
+    backend = _init_git_repo(work_dir)
+    branch = backend.get_branch_or_info()
+    subprocess.run(
+        ["git", "remote", "add", "origin", str(remote_dir)],
+        cwd=work_dir,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "push", "-u", "origin", branch],
+        cwd=work_dir,
+        check=True,
+        capture_output=True,
+    )
+
+    (work_dir / "other.py").write_text("x = 20\n", encoding="utf-8")
+    cfg = ConfigManager(
+        config_path=tmp_path / "config.ini",
+        tools_path=tmp_path / "tools.ini",
+    )
+    cfg.load()
+    session = ReviewSession(vcs=backend, config=cfg)
+    session.rescan()
+    session.stage_file("other.py")
+    session.commit("Bump x")
+    assert backend.supports_push is True
+    out = session.push()
+    assert out
+
+

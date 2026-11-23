@@ -374,6 +374,10 @@ class ReviewSession:
         self.rescan()
         return output
 
+    def push(self) -> str:
+        """Push commits to the remote repository."""
+        return self.vcs.push()
+
     def build_tool_argv(self, tool: ToolSpec) -> list[str]:
         """Build expanded argv for `tool` using the current cursor context."""
         placeholders = build_placeholder_map(
