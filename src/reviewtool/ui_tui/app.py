@@ -15,6 +15,7 @@ from textual.widgets import (
     Header,
     Input,
     Label,
+    LoadingIndicator,
     OptionList,
     RichLog,
     Select,
@@ -312,6 +313,16 @@ class ReviewTuiApp(App[int]):
         text-wrap: nowrap;
         text-overflow: clip;
     }
+    #loading_box {
+        height: 3;
+        align: center middle;
+        background: $boost;
+        color: $accent;
+    }
+    #loading_spinner {
+        width: 16;
+        height: 1;
+    }
     #status_line {
         height: 1;
         background: $panel;
@@ -424,6 +435,11 @@ class ReviewTuiApp(App[int]):
                     id="lbl_diff_header",
                     classes="section_title",
                 )
+                with Horizontal(id="loading_box"):
+                    yield LoadingIndicator(id="loading_spinner")
+                    yield Label(
+                        " Scanning repository status...", id="loading_label"
+                    )
                 yield DiffOptionList(id="diff_list")
         yield Static("", id="status_line")
         yield Footer()
@@ -431,13 +447,31 @@ class ReviewTuiApp(App[int]):
     def on_mount(self) -> None:
         self.title = (
             f"reviewtool ({self.session.vcs.name}: "
-            f"{self.session.vcs.repo_root.name} @ {self.session.branch_name})"
+            f"{self.session.vcs.repo_root.name})"
         )
         left_pane = self.query_one("#left_pane", Vertical)
         left_pane.styles.width = self.session.config.general.tui_left_width
-        self.session.rescan()
+        self.action_rescan()
+
+    def _set_loading(self, active: bool, text: str = "") -> None:
+        box = self.query_one("#loading_box", Horizontal)
+        box.display = active
+        if text:
+            self.query_one("#loading_label", Label).update(f" {text}")
+            self.query_one("#status_line", Static).update(text)
+
+    def _finish_async_rescan(self) -> None:
+        self._set_loading(False)
+        self.title = (
+            f"reviewtool ({self.session.vcs.name}: "
+            f"{self.session.vcs.repo_root.name} @ {self.session.branch_name})"
+        )
         self._refresh_all()
         self.query_one("#diff_list", DiffOptionList).focus()
+
+    def _fail_async_rescan(self, err_msg: str) -> None:
+        self._set_loading(False)
+        self.notify(err_msg, severity="error")
 
     def set_left_pane_width(self, width: int) -> None:
         """Resize the TUI left pane and persist `tui_left_width` to config.ini ASAP."""
@@ -642,8 +676,17 @@ class ReviewTuiApp(App[int]):
         )
 
     def action_rescan(self) -> None:
-        self.session.rescan()
-        self._refresh_all()
+        self._set_loading(True, "Scanning repository status...")
+
+        def _worker() -> None:
+            try:
+                self.session.rescan()
+            except VCSError as exc:
+                self.call_from_thread(self._fail_async_rescan, str(exc))
+                return
+            self.call_from_thread(self._finish_async_rescan)
+
+        self.run_worker(_worker, thread=True, exclusive=True)
 
     def action_next_unstaged(self) -> None:
         if self.session.select_adjacent_unstaged(1) is not None:

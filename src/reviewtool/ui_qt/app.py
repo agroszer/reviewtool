@@ -4,7 +4,7 @@ import os
 import sys
 from typing import cast
 
-from PyQt6.QtCore import QPoint, QProcess, Qt
+from PyQt6.QtCore import QPoint, QProcess, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QAction,
     QCloseEvent,
@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QSpinBox,
     QSplitter,
@@ -49,6 +50,25 @@ from reviewtool.ui_qt.diff_view import DiffViewWidget
 from reviewtool.vcs.base import VCSError
 
 
+class RescanWorker(QThread):
+    """Background worker thread for full repository status rescan."""
+
+    succeeded = pyqtSignal()
+    failed = pyqtSignal(str)
+
+    def __init__(self, session: ReviewSession, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.session = session
+
+    def run(self) -> None:
+        try:
+            self.session.rescan()
+        except VCSError as exc:
+            self.failed.emit(str(exc))
+            return
+        self.succeeded.emit()
+
+
 class MainWindow(QMainWindow):
     """Main PyQt6 window with two-pane staging, Viewed checkboxes, and inline diff."""
 
@@ -58,10 +78,10 @@ class MainWindow(QMainWindow):
         self._restoring_ui = True
         self._updating_lists = False
         self._bg_processes: list[QProcess] = []
+        self._rescan_worker: RescanWorker | None = None
 
         self.setWindowTitle(
-            f"reviewtool — {session.vcs.repo_root.name} "
-            f"({session.vcs.name}: {session.branch_name})"
+            f"reviewtool — {session.vcs.repo_root.name} ({session.vcs.name})"
         )
 
         self._build_ui()
@@ -69,12 +89,9 @@ class MainWindow(QMainWindow):
         self._restore_geometry_from_config()
         self._bind_global_shortcuts()
         self.diff_view.bind_tools(self.session.config.tools)
-
-        self.session.rescan()
-        self._refresh_file_lists()
-        self._refresh_diff_pane()
         self._restoring_ui = False
         self.diff_view.setFocus()
+        QTimer.singleShot(0, self._on_rescan)
 
     def _build_ui(self) -> None:
         central = QWidget(self)
@@ -264,6 +281,14 @@ class MainWindow(QMainWindow):
         root_layout.addWidget(self.main_splitter, stretch=1)
 
         self.status_bar = QStatusBar(self)
+        self.progress_bar = QProgressBar(self)
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.setFixedWidth(180)
+        self.progress_bar.setFixedHeight(16)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFormat("Scanning repo...")
+        self.progress_bar.setVisible(False)
+        self.status_bar.addPermanentWidget(self.progress_bar)
         self.setStatusBar(self.status_bar)
 
     def _restore_geometry_from_config(self) -> None:
@@ -639,7 +664,45 @@ class MainWindow(QMainWindow):
             self._safe_vcs_call(lambda: self.session.revert_file(entry))
 
     def _on_rescan(self) -> None:
-        self._safe_vcs_call(self.session.rescan)
+        if self._rescan_worker is not None and self._rescan_worker.isRunning():
+            return
+        self.btn_rescan.setEnabled(False)
+        self.progress_bar.setVisible(True)
+        self.status_bar.showMessage("Scanning repository status...")
+        QApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
+        self.diff_view.setPlainText("⏳ Scanning repository changes...")
+
+        worker = RescanWorker(self.session, self)
+        worker.succeeded.connect(self._on_rescan_succeeded)
+        worker.failed.connect(self._on_rescan_failed)
+        worker.finished.connect(worker.deleteLater)
+        self._rescan_worker = worker
+        worker.start()
+
+    def _on_rescan_succeeded(self) -> None:
+        QApplication.restoreOverrideCursor()
+        self.progress_bar.setVisible(False)
+        self.btn_rescan.setEnabled(True)
+        self._rescan_worker = None
+        self.setWindowTitle(
+            f"reviewtool — {self.session.vcs.repo_root.name} "
+            f"({self.session.vcs.name}: {self.session.branch_name})"
+        )
+        self._refresh_file_lists()
+        self._refresh_diff_pane()
+        self.status_bar.showMessage(
+            f"Ready — {len(self.session.unstaged)} unstaged, "
+            f"{len(self.session.staged)} staged."
+        )
+        self.diff_view.setFocus()
+
+    def _on_rescan_failed(self, err_msg: str) -> None:
+        QApplication.restoreOverrideCursor()
+        self.progress_bar.setVisible(False)
+        self.btn_rescan.setEnabled(True)
+        self._rescan_worker = None
+        QMessageBox.warning(self, "VCS Error", err_msg)
+        self.status_bar.showMessage("Scan failed.")
 
     def _on_adjust_context(self, delta: int) -> None:
         new_val = max(0, self.session.context_lines + delta)
