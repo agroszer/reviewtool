@@ -31,6 +31,41 @@ from reviewtool.state import ReviewSession
 from reviewtool.tools import ToolRunResult
 
 
+class CommandOutputDialog(QDialog):
+    """Modal dialog displaying output of a VCS operation (commit, push, pre-commit)."""
+
+    def __init__(
+        self,
+        title: str,
+        output: str,
+        is_error: bool = False,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.resize(760, 460)
+
+        layout = QVBoxLayout(self)
+        status_text = "Failed" if is_error else "Succeeded"
+        header = QLabel(f"<b>{title} — {status_text}</b>")
+        layout.addWidget(header)
+
+        editor = QPlainTextEdit(self)
+        editor.setReadOnly(True)
+        mono = QFont("Monospace", 10)
+        mono.setStyleHint(QFont.StyleHint.Monospace)
+        editor.setFont(mono)
+        editor.setPlainText(output.strip() or "(no output)")
+        layout.addWidget(editor)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Close, self
+        )
+        buttons.rejected.connect(self.reject)
+        buttons.accepted.connect(self.accept)
+        layout.addWidget(buttons)
+
+
 class ToolOutputDialog(QDialog):
     """Modal dialog displaying stdout, stderr, and exit code of an external tool."""
 

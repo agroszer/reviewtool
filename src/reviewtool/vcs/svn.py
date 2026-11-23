@@ -53,8 +53,13 @@ class SvnBackend(VCSBackend):
             check=False,
         )
         if check and proc.returncode != 0:
-            err = proc.stderr.strip() or proc.stdout.strip() or "svn command failed"
-            raise VCSError(f"svn {' '.join(args)}: {err}")
+            parts = [
+                p.strip()
+                for p in (proc.stdout, proc.stderr)
+                if p and p.strip()
+            ]
+            err = "\n".join(parts) or "svn command failed"
+            raise VCSError(f"svn {' '.join(args)}:\n{err}")
         return proc
 
     def get_branch_or_info(self) -> str:
@@ -241,7 +246,10 @@ class SvnBackend(VCSBackend):
         proc = self._run_svn(["commit", "-m", msg, "--", *paths])
         for path in paths:
             self._staged_paths.discard(path)
-        return proc.stdout.strip()
+        parts = [
+            p.strip() for p in (proc.stdout, proc.stderr) if p and p.strip()
+        ]
+        return "\n".join(parts) or "OK"
 
     def get_last_commit_message(self) -> str:
         return ""

@@ -59,8 +59,13 @@ class GitBackend(VCSBackend):
             check=False,
         )
         if check and proc.returncode != 0:
-            err = proc.stderr.strip() or proc.stdout.strip() or "git command failed"
-            raise VCSError(f"git {' '.join(args)}: {err}")
+            parts = [
+                p.strip()
+                for p in (proc.stdout, proc.stderr)
+                if p and p.strip()
+            ]
+            err = "\n".join(parts) or "git command failed"
+            raise VCSError(f"git {' '.join(args)}:\n{err}")
         return proc
 
     def _has_head(self) -> bool:
@@ -349,11 +354,17 @@ class GitBackend(VCSBackend):
         if amend:
             args.append("--amend")
         proc = self._run_git(args)
-        return proc.stdout.strip()
+        parts = [
+            p.strip() for p in (proc.stdout, proc.stderr) if p and p.strip()
+        ]
+        return "\n".join(parts) or "OK"
 
     def push(self) -> str:
         proc = self._run_git(["push"])
-        return (proc.stdout.strip() or proc.stderr.strip() or "OK")
+        parts = [
+            p.strip() for p in (proc.stdout, proc.stderr) if p and p.strip()
+        ]
+        return "\n".join(parts) or "OK"
 
     def get_last_commit_message(self) -> str:
         if not self._has_head():

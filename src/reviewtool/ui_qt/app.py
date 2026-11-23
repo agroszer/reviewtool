@@ -42,6 +42,7 @@ from reviewtool.tools import (
     wrap_argv_with_cd,
 )
 from reviewtool.ui_qt.dialogs import (
+    CommandOutputDialog,
     OptionsDialog,
     ToolOutputDialog,
     confirm_action,
@@ -69,6 +70,25 @@ class RescanWorker(QThread):
         self.succeeded.emit()
 
 
+class VcsActionWorker(QThread):
+    """Background worker thread for commit/push (including pre-commit hooks)."""
+
+    succeeded = pyqtSignal(str)
+    failed = pyqtSignal(str)
+
+    def __init__(self, fn, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.fn = fn
+
+    def run(self) -> None:
+        try:
+            out = self.fn()
+        except VCSError as exc:
+            self.failed.emit(str(exc))
+            return
+        self.succeeded.emit(out)
+
+
 class MainWindow(QMainWindow):
     """Main PyQt6 window with two-pane staging, Viewed checkboxes, and inline diff."""
 
@@ -79,6 +99,7 @@ class MainWindow(QMainWindow):
         self._updating_lists = False
         self._bg_processes: list[QProcess] = []
         self._rescan_worker: RescanWorker | None = None
+        self._action_worker: VcsActionWorker | None = None
         self._hotkeys: list[QShortcut] = []
 
         self.setWindowTitle(
@@ -822,6 +843,7 @@ class MainWindow(QMainWindow):
         if self._rescan_worker is not None and self._rescan_worker.isRunning():
             return
         self.btn_rescan.setEnabled(False)
+        self.progress_bar.setFormat("Scanning repo...")
         self.progress_bar.setVisible(True)
         self.status_bar.showMessage("Scanning repository status...")
         QApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
@@ -1005,6 +1027,8 @@ class MainWindow(QMainWindow):
             )
 
     def _on_amend_toggled(self, checked: bool) -> None:
+        if self._restoring_ui:
+            return
         if checked and not self.txt_commit.toPlainText().strip():
             last_msg = self.session.vcs.get_last_commit_message()
             if last_msg:
@@ -1019,32 +1043,79 @@ class MainWindow(QMainWindow):
         sep = "\n\n" if cur_msg else ""
         self.txt_commit.setPlainText(f"{cur_msg}{sep}{line}\n")
 
+    def _set_action_busy(self, busy: bool, label: str = "") -> None:
+        self.btn_commit.setEnabled(not busy)
+        self.btn_push.setEnabled(not busy)
+        self.btn_rescan.setEnabled(not busy)
+        self.chk_amend.setEnabled(not busy)
+        if busy:
+            self.progress_bar.setFormat(label)
+            self.progress_bar.setVisible(True)
+            self.status_bar.showMessage(label)
+            QApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
+        else:
+            QApplication.restoreOverrideCursor()
+            self.progress_bar.setVisible(False)
+            self._action_worker = None
+
     def _on_commit(self) -> None:
+        if self._action_worker is not None and self._action_worker.isRunning():
+            return
         msg = self.txt_commit.toPlainText().strip()
         amend = self.chk_amend.isChecked()
-        try:
-            output = self.session.commit(msg, amend=amend)
-        except VCSError as exc:
-            QMessageBox.warning(self, "Commit Failed", str(exc))
-            return
+        self._set_action_busy(True, "Committing (running hooks)...")
 
+        worker = VcsActionWorker(
+            lambda: self.session.commit(msg, amend=amend), self
+        )
+        worker.succeeded.connect(self._on_commit_succeeded)
+        worker.failed.connect(self._on_commit_failed)
+        worker.finished.connect(worker.deleteLater)
+        self._action_worker = worker
+        worker.start()
+
+    def _on_commit_succeeded(self, output: str) -> None:
+        self._set_action_busy(False)
         self.txt_commit.clear()
+        self._restoring_ui = True
         self.chk_amend.setChecked(False)
+        self._restoring_ui = False
         self._refresh_file_lists()
         self._refresh_diff_pane()
-        self.status_bar.showMessage(
-            f"Committed successfully: {output.splitlines()[0] if output else 'OK'}"
-        )
+        first_line = output.splitlines()[0] if output else "OK"
+        self.status_bar.showMessage(f"Committed: {first_line}")
+        CommandOutputDialog("Commit Output", output, is_error=False, parent=self).exec()
+
+    def _on_commit_failed(self, err_msg: str) -> None:
+        self.session.rescan()
+        self._set_action_busy(False)
+        self._refresh_file_lists()
+        self._refresh_diff_pane()
+        self.status_bar.showMessage("Commit failed.")
+        CommandOutputDialog("Commit Failed", err_msg, is_error=True, parent=self).exec()
 
     def _on_push(self) -> None:
-        try:
-            output = self.session.push()
-        except VCSError as exc:
-            QMessageBox.warning(self, "Push Failed", str(exc))
+        if self._action_worker is not None and self._action_worker.isRunning():
             return
-        self.status_bar.showMessage(
-            f"Pushed successfully: {output.splitlines()[0] if output else 'OK'}"
-        )
+        self._set_action_busy(True, "Pushing to remote...")
+
+        worker = VcsActionWorker(self.session.push, self)
+        worker.succeeded.connect(self._on_push_succeeded)
+        worker.failed.connect(self._on_push_failed)
+        worker.finished.connect(worker.deleteLater)
+        self._action_worker = worker
+        worker.start()
+
+    def _on_push_succeeded(self, output: str) -> None:
+        self._set_action_busy(False)
+        first_line = output.splitlines()[0] if output else "OK"
+        self.status_bar.showMessage(f"Pushed: {first_line}")
+        CommandOutputDialog("Push Output", output, is_error=False, parent=self).exec()
+
+    def _on_push_failed(self, err_msg: str) -> None:
+        self._set_action_busy(False)
+        self.status_bar.showMessage("Push failed.")
+        CommandOutputDialog("Push Failed", err_msg, is_error=True, parent=self).exec()
 
     def _run_external_tool(self, tool: ToolSpec) -> None:
         argv = self.session.build_tool_argv(tool)

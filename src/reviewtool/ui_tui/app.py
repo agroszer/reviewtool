@@ -44,6 +44,41 @@ _RENDER_CYCLE: tuple[RenderMode, ...] = ("full", "word_diff", "simple")
 _THEME_CYCLE: tuple[str, ...] = tuple(p[0] for p in COLOR_SCHEME_PRESETS)
 
 
+class CommandOutputModal(ModalScreen[None]):
+    """Modal screen showing captured output from a VCS operation (commit/push)."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss", "Close"),
+        Binding("q", "dismiss", "Close"),
+    ]
+
+    def __init__(
+        self, title: str, output: str, is_error: bool = False
+    ) -> None:
+        super().__init__()
+        self.modal_title = title
+        self.output = output
+        self.is_error = is_error
+
+    def compose(self) -> ComposeResult:
+        status = "Failed" if self.is_error else "Succeeded"
+        with Vertical(id="modal_box"):
+            yield Label(f"{self.modal_title} — {status}")
+            log = RichLog(highlight=True, markup=False, id="modal_log")
+            yield log
+            yield Button(
+                "Close (Esc)", id="btn_close_cmd_modal", variant="primary"
+            )
+
+    def on_mount(self) -> None:
+        log = self.query_one("#modal_log", RichLog)
+        text = self.output.strip() or "(no output)"
+        log.write(text)
+
+    def on_button_pressed(self, _event: Button.Pressed) -> None:
+        self.dismiss(None)
+
+
 class ToolOutputModal(ModalScreen[None]):
     """Modal screen showing captured stdout/stderr from an external tool."""
 
@@ -742,34 +777,57 @@ class ReviewTuiApp(App[int]):
         self._refresh_all()
 
     def _perform_push(self) -> None:
-        try:
-            out = self.session.push()
-        except VCSError as exc:
-            self.notify(str(exc), severity="error")
-            return
-        self.notify(
-            f"Pushed: {out.splitlines()[0] if out else 'OK'}",
-            severity="information",
+        self._set_loading(True, "Pushing to remote...")
+
+        def _worker() -> None:
+            try:
+                out = self.session.push()
+            except VCSError as exc:
+                self.call_from_thread(self._finish_async_push, str(exc), True)
+                return
+            self.call_from_thread(self._finish_async_push, out, False)
+
+        self.run_worker(_worker, thread=True, exclusive=True)
+
+    def _finish_async_push(self, output: str, is_error: bool) -> None:
+        self._set_loading(False)
+        title = "Push Failed" if is_error else "Push Output"
+        self.push_screen(
+            CommandOutputModal(title, output, is_error=is_error)
         )
 
     def _perform_commit(self) -> None:
         commit_input = self.query_one("#commit_input", TextArea)
+        msg = commit_input.text
         amend = False
         if self.session.vcs.supports_amend:
             chk = self.query_one("#chk_amend", Checkbox)
             amend = chk.value
-        try:
-            out = self.session.commit(commit_input.text, amend=amend)
-        except VCSError as exc:
-            self.notify(str(exc), severity="error")
-            return
-        commit_input.text = ""
-        if self.session.vcs.supports_amend:
-            self.query_one("#chk_amend", Checkbox).value = False
+        self._set_loading(True, "Committing (running hooks)...")
+
+        def _worker() -> None:
+            try:
+                out = self.session.commit(msg, amend=amend)
+            except VCSError as exc:
+                self.session.rescan()
+                self.call_from_thread(
+                    self._finish_async_commit, str(exc), True
+                )
+                return
+            self.call_from_thread(self._finish_async_commit, out, False)
+
+        self.run_worker(_worker, thread=True, exclusive=True)
+
+    def _finish_async_commit(self, output: str, is_error: bool) -> None:
+        self._set_loading(False)
+        if not is_error:
+            self.query_one("#commit_input", TextArea).text = ""
+            if self.session.vcs.supports_amend:
+                self.query_one("#chk_amend", Checkbox).value = False
         self._refresh_all()
-        self.notify(
-            f"Committed: {out.splitlines()[0] if out else 'OK'}",
-            severity="information",
+        title = "Commit Failed" if is_error else "Commit Output"
+        self.push_screen(
+            CommandOutputModal(title, output, is_error=is_error)
         )
 
     def action_rescan(self) -> None:
