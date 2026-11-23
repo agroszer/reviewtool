@@ -853,6 +853,7 @@ class MainWindow(QMainWindow):
             last_msg = self.session.vcs.get_last_commit_message()
             if last_msg:
                 self.txt_commit.setPlainText(last_msg)
+        self._safe_vcs_call(lambda: self.session.set_amend(checked))
 
     def _on_signoff(self) -> None:
         line = self.session.vcs.get_signoff_line()

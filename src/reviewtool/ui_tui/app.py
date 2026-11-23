@@ -636,12 +636,19 @@ class ReviewTuiApp(App[int]):
                 self._refresh_diff()
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
-        if event.checkbox.id == "chk_amend" and event.value:
-            commit_input = self.query_one("#commit_input", TextArea)
-            if not commit_input.text.strip():
-                last_msg = self.session.vcs.get_last_commit_message()
-                if last_msg:
-                    commit_input.text = last_msg
+        if event.checkbox.id == "chk_amend":
+            if event.value:
+                commit_input = self.query_one("#commit_input", TextArea)
+                if not commit_input.text.strip():
+                    last_msg = self.session.vcs.get_last_commit_message()
+                    if last_msg:
+                        commit_input.text = last_msg
+            try:
+                self.session.set_amend(event.value)
+            except VCSError as exc:
+                self.notify(str(exc), severity="error")
+                return
+            self._refresh_all()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         btn_id = event.button.id

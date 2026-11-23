@@ -26,6 +26,15 @@ class VCSBackend(ABC):
     def supports_amend(self) -> bool:
         """Return True if the VCS supports amending the last commit."""
 
+    @property
+    def amend_mode(self) -> bool:
+        """Return True if amend mode is currently active."""
+        return False
+
+    @amend_mode.setter
+    def amend_mode(self, value: bool) -> None:
+        """Enable or disable amend mode."""
+
     @abstractmethod
     def get_branch_or_info(self) -> str:
         """Return current branch name (Git) or URL/revision (SVN)."""

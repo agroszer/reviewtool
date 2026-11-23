@@ -17,6 +17,12 @@ from reviewtool.vcs.base import VCSBackend, VCSError
 class GitBackend(VCSBackend):
     """Git repository backend using subprocess calls to `git`."""
 
+    _EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+    def __init__(self, repo_root: Path) -> None:
+        super().__init__(repo_root)
+        self._amend = False
+
     @property
     def name(self) -> str:
         return "git"
@@ -24,6 +30,14 @@ class GitBackend(VCSBackend):
     @property
     def supports_amend(self) -> bool:
         return True
+
+    @property
+    def amend_mode(self) -> bool:
+        return self._amend
+
+    @amend_mode.setter
+    def amend_mode(self, value: bool) -> None:
+        self._amend = value
 
     def _run_git(
         self,
@@ -49,6 +63,14 @@ class GitBackend(VCSBackend):
         proc = self._run_git(["rev-parse", "--verify", "HEAD"], check=False)
         return proc.returncode == 0
 
+    def _base_tree(self) -> str | None:
+        if not self._has_head():
+            return None
+        if not self._amend:
+            return "HEAD"
+        proc = self._run_git(["rev-parse", "--verify", "HEAD^"], check=False)
+        return "HEAD^" if proc.returncode == 0 else self._EMPTY_TREE
+
     def get_branch_or_info(self) -> str:
         proc = self._run_git(
             ["rev-parse", "--abbrev-ref", "HEAD"], check=False
@@ -61,7 +83,10 @@ class GitBackend(VCSBackend):
 
     def scan_status(self) -> tuple[list[FileEntry], list[FileEntry]]:
         proc = self._run_git(["status", "--porcelain=v1", "-z", "-uall"])
-        return self._parse_porcelain_z(proc.stdout)
+        unstaged, staged = self._parse_porcelain_z(proc.stdout)
+        if self._amend and self._has_head():
+            staged = self._scan_amend_staged()
+        return unstaged, staged
 
     def scan_file_status(
         self, rel_path: str
@@ -70,9 +95,57 @@ class GitBackend(VCSBackend):
             ["status", "--porcelain=v1", "-z", "-uall", "--", rel_path]
         )
         unstaged, staged = self._parse_porcelain_z(proc.stdout)
+        if self._amend and self._has_head():
+            staged = self._scan_amend_staged(rel_path)
         u_entry = unstaged[0] if unstaged else None
         s_entry = staged[0] if staged else None
         return u_entry, s_entry
+
+    def _scan_amend_staged(
+        self, rel_path: str | None = None
+    ) -> list[FileEntry]:
+        base = self._base_tree()
+        if base is None:
+            return []
+        args = ["diff-index", "--cached", "-z", "-M", base]
+        if rel_path is not None:
+            args.extend(["--", rel_path])
+        proc = self._run_git(args)
+        return self._parse_diff_index_z(proc.stdout)
+
+    def _parse_diff_index_z(self, raw: str) -> list[FileEntry]:
+        staged: list[FileEntry] = []
+        if not raw:
+            return staged
+        tokens = raw.split("\x00")
+        idx = 0
+        total = len(tokens)
+        while idx < total:
+            meta = tokens[idx]
+            idx += 1
+            if not meta.startswith(":"):
+                continue
+            status_part = meta.split(" ")[-1]
+            code = status_part[0]
+            if code in ("R", "C") and idx + 1 < total:
+                orig_path = tokens[idx]
+                path = tokens[idx + 1]
+                idx += 2
+                staged.append(
+                    FileEntry(
+                        path=path,
+                        status=code,
+                        staged=True,
+                        orig_path=orig_path,
+                    )
+                )
+            elif idx < total:
+                path = tokens[idx]
+                idx += 1
+                staged.append(
+                    FileEntry(path=path, status=code, staged=True)
+                )
+        return staged
 
     def _parse_porcelain_z(
         self, raw: str
@@ -139,6 +212,9 @@ class GitBackend(VCSBackend):
         args = ["diff", "--no-color", "--no-ext-diff", f"-U{ctx}"]
         if entry.staged:
             args.append("--cached")
+            base = self._base_tree()
+            if self._amend and base is not None:
+                args.append(base)
         args.extend(["--", entry.path])
         proc = self._run_git(args)
         fdiff = parse_unified_diff(proc.stdout, entry.path)
@@ -160,8 +236,9 @@ class GitBackend(VCSBackend):
         self._run_git(["add", "--", rel_path])
 
     def unstage_file(self, rel_path: str) -> None:
-        if self._has_head():
-            self._run_git(["reset", "HEAD", "--", rel_path])
+        base = self._base_tree()
+        if base is not None and base != self._EMPTY_TREE:
+            self._run_git(["reset", base, "--", rel_path])
         else:
             self._run_git(["rm", "-f", "--cached", "--", rel_path])
 
@@ -173,8 +250,9 @@ class GitBackend(VCSBackend):
     def unstage_all(self, entries: list[FileEntry]) -> None:
         if not entries:
             return
-        if self._has_head():
-            self._run_git(["reset", "HEAD"])
+        base = self._base_tree()
+        if base is not None and base != self._EMPTY_TREE:
+            self._run_git(["reset", base])
         else:
             self._run_git(["rm", "-rf", "--cached", "."])
 

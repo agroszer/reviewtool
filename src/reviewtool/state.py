@@ -360,9 +360,17 @@ class ReviewSession:
         )
         self.refresh_single_file(path, prefer_staged=is_staged)
 
+    def set_amend(self, amend: bool) -> None:
+        """Toggle amend mode on the VCS backend and rescan staged files."""
+        if self.vcs.amend_mode == amend:
+            return
+        self.vcs.amend_mode = amend
+        self.rescan()
+
     def commit(self, message: str, amend: bool = False) -> str:
         """Commit currently staged files and rescan repository status."""
         output = self.vcs.commit(message, self.staged, amend=amend)
+        self.vcs.amend_mode = False
         self.rescan()
         return output
 

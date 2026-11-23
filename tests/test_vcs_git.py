@@ -115,3 +115,42 @@ def test_git_unstage_on_unborn_head_with_subsequent_edits(
     assert len(staged) == 0
     assert [e.path for e in unstaged] == ["state.py"]
     assert f.read_text(encoding="utf-8") == "v = 2\n"
+
+
+def test_git_amend_populates_staged_from_prev_commit(tmp_path: Path) -> None:
+    backend = _init_git_repo(tmp_path)
+    (tmp_path / "app.py").write_text(
+        "def one():\n    return 42\n\ndef two():\n    return 2\n",
+        encoding="utf-8",
+    )
+    backend.stage_file("app.py")
+    backend.commit("Change one to 42", list(backend.scan_status()[1]))
+
+    cfg_dir = tmp_path.parent / f"{tmp_path.name}_cfg"
+    cfg_dir.mkdir(exist_ok=True)
+    cfg = ConfigManager(
+        config_path=cfg_dir / "config.ini",
+        tools_path=cfg_dir / "tools.ini",
+    )
+    cfg.load()
+    session = ReviewSession(vcs=backend, config=cfg)
+    session.rescan()
+    assert session.staged == []
+
+    session.set_amend(True)
+    assert [e.path for e in session.staged] == ["app.py"]
+    s_diff = session.select_entry(session.staged[0])
+    assert s_diff is not None
+    added = [ln.text for ln in s_diff.hunks[0].lines if ln.kind == "add"]
+    assert "    return 42" in added
+
+    session.unstage_file("app.py")
+    assert session.staged == []
+    assert [e.path for e in session.unstaged] == ["app.py"]
+
+    session.stage_file("app.py")
+    assert [e.path for e in session.staged] == ["app.py"]
+
+    session.set_amend(False)
+    assert session.staged == []
+
