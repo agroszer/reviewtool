@@ -469,9 +469,9 @@ class ReviewTuiApp(App[int]):
                 yield OptionList(id="list_staged")
                 yield Label("Commit Message:", classes="section_title")
                 yield TextArea(id="commit_input")
+                if self.session.vcs.supports_amend:
+                    yield Checkbox("Amend Last Commit", id="chk_amend")
                 with Horizontal(id="commit_buttons"):
-                    if self.session.vcs.supports_amend:
-                        yield Checkbox("Amend", id="chk_amend")
                     yield Button("Sign Off", id="btn_signoff")
                     yield Button("Commit", id="btn_commit", variant="success")
                     if self.session.vcs.supports_push:
