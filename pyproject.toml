@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reviewtool"
+version = "0.1.0"
+description = "Local pre-commit code review tool for Git and SVN with PyQt6 and Textual TUI"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "PyQt6==6.12.1",
+    "textual==8.2.8",
+    "pygments==2.21.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.2.0",
+]
+
+[project.scripts]
+reviewtool = "reviewtool.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
