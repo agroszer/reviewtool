@@ -55,4 +55,15 @@ def test_config_creates_split_files_and_persists_asap(tmp_path: Path) -> None:
     assert mgr2.qt_geometry.window_height == 950
     assert mgr2.qt_geometry.main_splitter == [420, 1180]
     assert mgr2.qt_geometry.left_splitter == [300, 350, 300]
+    assert mgr2.hotkeys.rescan == "F5"
+    assert mgr2.hotkeys.commit == "Ctrl+Return"
+    assert mgr2.hotkeys.push == "Ctrl+P"
     assert tools_file.read_text(encoding="utf-8") == tools_mtime_before
+
+    raw_cfg = cfg_file.read_text(encoding="utf-8").replace(
+        "commit = Ctrl+Return", "commit = Alt+C"
+    )
+    cfg_file.write_text(raw_cfg, encoding="utf-8")
+    mgr3 = ConfigManager(config_path=cfg_file, tools_path=tools_file)
+    mgr3.load()
+    assert mgr3.hotkeys.commit == "Alt+C"

@@ -1,5 +1,6 @@
 """PyQt6 dialogs for options configuration, tool output, and confirmations."""
 
+from dataclasses import asdict
 from typing import Callable, cast
 
 from PyQt6.QtGui import QColor, QFont
@@ -19,11 +20,12 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSpinBox,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from reviewtool.config import COLOR_SCHEME_PRESETS
+from reviewtool.config import COLOR_SCHEME_PRESETS, HOTKEY_FIELDS
 from reviewtool.models import RenderMode
 from reviewtool.state import ReviewSession
 from reviewtool.tools import ToolRunResult
@@ -118,9 +120,14 @@ class OptionsDialog(QDialog):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
+        tabs = QTabWidget(self)
+        root.addWidget(tabs)
+
+        general_tab = QWidget(self)
+        gen_layout = QVBoxLayout(general_tab)
         gen = self.session.config.general
 
-        display_group = QGroupBox("Diff & View Options", self)
+        display_group = QGroupBox("Diff & View Options", general_tab)
         d_form = QFormLayout(display_group)
 
         self.combo_mode = QComboBox()
@@ -149,9 +156,9 @@ class OptionsDialog(QDialog):
         self.chk_hide_viewed.setChecked(self.session.hide_viewed)
         self.chk_hide_viewed.toggled.connect(self._on_hide_viewed_changed)
         d_form.addRow("File List Filter:", self.chk_hide_viewed)
-        root.addWidget(display_group)
+        gen_layout.addWidget(display_group)
 
-        font_group = QGroupBox("Fonts & Sizes", self)
+        font_group = QGroupBox("Fonts & Sizes", general_tab)
         f_form = QFormLayout(font_group)
 
         self.font_combo_diff = QFontComboBox()
@@ -178,9 +185,9 @@ class OptionsDialog(QDialog):
         self.spin_commit_font.setValue(gen.commit_font_size)
         self.spin_commit_font.valueChanged.connect(self._on_commit_font_changed)
         f_form.addRow("Commit Box Font Size:", self.spin_commit_font)
-        root.addWidget(font_group)
+        gen_layout.addWidget(font_group)
 
-        color_group = QGroupBox("Diff Color Scheme", self)
+        color_group = QGroupBox("Diff Color Scheme", general_tab)
         c_form = QFormLayout(color_group)
 
         self.combo_theme = QComboBox()
@@ -198,7 +205,7 @@ class OptionsDialog(QDialog):
         c_form.addRow("Color Preset:", self.combo_theme)
 
         for field_key, label_text in _COLOR_FIELDS:
-            row_w = QWidget(self)
+            row_w = QWidget(general_tab)
             row_l = QHBoxLayout(row_w)
             row_l.setContentsMargins(0, 0, 0, 0)
             edit = QLineEdit(self._get_color_val(field_key))
@@ -215,7 +222,23 @@ class OptionsDialog(QDialog):
             self._color_edits[field_key] = edit
             c_form.addRow(f"{label_text}:", row_w)
 
-        root.addWidget(color_group)
+        gen_layout.addWidget(color_group)
+        tabs.addTab(general_tab, "General")
+
+        keys_tab = QWidget(self)
+        keys_layout = QVBoxLayout(keys_tab)
+        hotkey_group = QGroupBox("Button Hotkeys", keys_tab)
+        h_form = QFormLayout(hotkey_group)
+        hk_dict = asdict(self.session.config.hotkeys)
+        for hk_key, hk_label in HOTKEY_FIELDS:
+            hk_edit = QLineEdit(hk_dict[hk_key])
+            hk_edit.editingFinished.connect(
+                self._make_hotkey_edit_cb(hk_key, hk_edit)
+            )
+            h_form.addRow(f"{hk_label}:", hk_edit)
+        keys_layout.addWidget(hotkey_group)
+        keys_layout.addStretch(1)
+        tabs.addTab(keys_tab, "Keys")
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Close, self
@@ -283,6 +306,19 @@ class OptionsDialog(QDialog):
         def _cb() -> None:
             if not self._syncing:
                 self._set_color_val(key, edit.text())
+
+        return _cb
+
+    def _make_hotkey_edit_cb(
+        self, key: str, edit: QLineEdit
+    ) -> Callable[[], None]:
+        def _cb() -> None:
+            if not self._syncing:
+                setattr(
+                    self.session.config.hotkeys, key, edit.text().strip()
+                )
+                self.session.config.save_general()
+                self.on_changed()
 
         return _cb
 

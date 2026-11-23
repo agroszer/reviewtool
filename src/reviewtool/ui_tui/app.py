@@ -1,11 +1,12 @@
 """Textual TUI frontend application for reviewtool."""
 
+from dataclasses import asdict
 from typing import cast
 
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.events import Key, MouseDown, MouseMove, MouseUp
 from textual.screen import ModalScreen
 from textual.widgets import (
@@ -20,11 +21,13 @@ from textual.widgets import (
     RichLog,
     Select,
     Static,
+    TabbedContent,
+    TabPane,
     TextArea,
 )
 from textual.widgets.option_list import Option
 
-from reviewtool.config import COLOR_SCHEME_PRESETS
+from reviewtool.config import COLOR_SCHEME_PRESETS, HOTKEY_FIELDS
 from reviewtool.models import FileEntry, RenderMode, ToolSpec
 from reviewtool.state import ReviewSession
 from reviewtool.tools import (
@@ -140,46 +143,77 @@ class OptionsModal(ModalScreen[None]):
 
         with Vertical(id="options_modal_box"):
             yield Label("Options (saved immediately)", classes="section_title")
-            with Horizontal(classes="opt_row"):
-                yield Label("Render Mode:", classes="opt_label")
-                yield Select(
-                    [
-                        ("Full (Dual Gutter + Word Diff + Syntax)", "full"),
-                        ("Word Diff (Dual Gutter + Word Diff)", "word_diff"),
-                        ("Simple (Single Gutter + Basic Colors)", "simple"),
-                    ],
-                    value=self.session.render_mode,
-                    allow_blank=False,
-                    id="sel_render_mode",
-                )
-            with Horizontal(classes="opt_row"):
-                yield Label("Color Scheme:", classes="opt_label")
-                yield Select(
-                    [(label, pid) for pid, label, _s in COLOR_SCHEME_PRESETS],
-                    value=cur_theme,
-                    allow_blank=False,
-                    id="sel_color_scheme",
-                )
-            with Horizontal(classes="opt_row"):
-                yield Label("Context Lines:", classes="opt_label")
-                yield Button("-", id="btn_opt_ctx_dec", classes="ctx_step_btn")
-                yield Input(
-                    str(self.session.context_lines),
-                    type="integer",
-                    id="inp_opt_context",
-                )
-                yield Button("+", id="btn_opt_ctx_inc", classes="ctx_step_btn")
-            with Horizontal(classes="opt_row"):
-                yield Checkbox(
-                    "Full File Context",
-                    value=self.session.full_file,
-                    id="chk_opt_full_file",
-                )
-                yield Checkbox(
-                    "Hide Viewed Files",
-                    value=self.session.hide_viewed,
-                    id="chk_opt_hide_viewed",
-                )
+            with TabbedContent():
+                with TabPane("General", id="tab_general"):
+                    with Horizontal(classes="opt_row"):
+                        yield Label("Render Mode:", classes="opt_label")
+                        yield Select(
+                            [
+                                (
+                                    "Full (Dual Gutter + Word Diff + Syntax)",
+                                    "full",
+                                ),
+                                (
+                                    "Word Diff (Dual Gutter + Word Diff)",
+                                    "word_diff",
+                                ),
+                                (
+                                    "Simple (Single Gutter + Basic Colors)",
+                                    "simple",
+                                ),
+                            ],
+                            value=self.session.render_mode,
+                            allow_blank=False,
+                            id="sel_render_mode",
+                        )
+                    with Horizontal(classes="opt_row"):
+                        yield Label("Color Scheme:", classes="opt_label")
+                        yield Select(
+                            [
+                                (label, pid)
+                                for pid, label, _s in COLOR_SCHEME_PRESETS
+                            ],
+                            value=cur_theme,
+                            allow_blank=False,
+                            id="sel_color_scheme",
+                        )
+                    with Horizontal(classes="opt_row"):
+                        yield Label("Context Lines:", classes="opt_label")
+                        yield Button(
+                            "-", id="btn_opt_ctx_dec", classes="ctx_step_btn"
+                        )
+                        yield Input(
+                            str(self.session.context_lines),
+                            type="integer",
+                            id="inp_opt_context",
+                        )
+                        yield Button(
+                            "+", id="btn_opt_ctx_inc", classes="ctx_step_btn"
+                        )
+                    with Horizontal(classes="opt_row"):
+                        yield Checkbox(
+                            "Full File Context",
+                            value=self.session.full_file,
+                            id="chk_opt_full_file",
+                        )
+                        yield Checkbox(
+                            "Hide Viewed Files",
+                            value=self.session.hide_viewed,
+                            id="chk_opt_hide_viewed",
+                        )
+                with TabPane("Keys", id="tab_keys"):
+                    hk_dict = asdict(self.session.config.hotkeys)
+                    with VerticalScroll(id="keys_scroll"):
+                        for hk_key, hk_label in HOTKEY_FIELDS:
+                            with Horizontal(classes="opt_row"):
+                                yield Label(
+                                    f"{hk_label}:", classes="opt_label"
+                                )
+                                yield Input(
+                                    hk_dict[hk_key],
+                                    id=f"hk_{hk_key}",
+                                    classes="hk_input",
+                                )
             with Horizontal(classes="opt_footer"):
                 yield Button(
                     "Close (Esc)", id="btn_close_options", variant="primary"
@@ -205,11 +239,17 @@ class OptionsModal(ModalScreen[None]):
             self.session.set_hide_viewed(event.value)
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        if not self._ready or event.input.id != "inp_opt_context":
+        if not self._ready:
             return
-        raw = event.value.strip()
-        if raw.isdigit():
-            self.session.set_context_lines(int(raw))
+        inp_id = event.input.id or ""
+        if inp_id == "inp_opt_context":
+            raw = event.value.strip()
+            if raw.isdigit():
+                self.session.set_context_lines(int(raw))
+        elif inp_id.startswith("hk_"):
+            hk_key = inp_id[3:]
+            setattr(self.session.config.hotkeys, hk_key, event.value.strip())
+            self.session.config.save_general()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         btn_id = event.button.id
@@ -338,11 +378,17 @@ class ReviewTuiApp(App[int]):
         align: center middle;
     }
     #options_modal_box {
-        width: 74;
-        height: auto;
+        width: 78;
+        height: 85%;
         border: thick $primary;
         background: $surface;
         padding: 1 2;
+    }
+    #keys_scroll {
+        height: 1fr;
+    }
+    .hk_input {
+        width: 1fr;
     }
     .opt_row {
         height: 3;
@@ -350,7 +396,7 @@ class ReviewTuiApp(App[int]):
         margin-top: 1;
     }
     .opt_label {
-        width: 18;
+        width: 22;
         content-align: left middle;
     }
     #sel_render_mode, #sel_color_scheme {
@@ -666,6 +712,35 @@ class ReviewTuiApp(App[int]):
         elif btn_id == "btn_push":
             self._perform_push()
 
+    def _toggle_amend_hotkey(self) -> None:
+        if self.session.vcs.supports_amend:
+            chk = self.query_one("#chk_amend", Checkbox)
+            chk.value = not chk.value
+
+    def _signoff_hotkey(self) -> None:
+        commit_input = self.query_one("#commit_input", TextArea)
+        line = self.session.vcs.get_signoff_line()
+        cur_text = commit_input.text.rstrip()
+        if line not in cur_text:
+            sep = "\n\n" if cur_text else ""
+            commit_input.text = f"{cur_text}{sep}{line}\n"
+
+    def _stage_all_hotkey(self) -> None:
+        try:
+            self.session.stage_all()
+        except VCSError as exc:
+            self.notify(str(exc), severity="error")
+            return
+        self._refresh_all()
+
+    def _unstage_all_hotkey(self) -> None:
+        try:
+            self.session.unstage_all()
+        except VCSError as exc:
+            self.notify(str(exc), severity="error")
+            return
+        self._refresh_all()
+
     def _perform_push(self) -> None:
         try:
             out = self.session.push()
@@ -870,7 +945,39 @@ class ReviewTuiApp(App[int]):
             self._execute_tool(tool)
 
     def on_key(self, event: Key) -> None:
-        if isinstance(self.focused, TextArea):
+        in_editor = isinstance(self.focused, TextArea)
+        hk = self.session.config.hotkeys
+        hotkey_actions = [
+            (hk.rescan, self.action_rescan),
+            (hk.context_minus, self.action_dec_context),
+            (hk.context_plus, self.action_inc_context),
+            (hk.full_file, self.action_toggle_full_file),
+            (hk.hide_viewed, self.action_toggle_hide_viewed),
+            (hk.tools, self.action_open_tools_menu),
+            (hk.options, self.action_open_options_modal),
+            (hk.stage_file, self.action_stage_item),
+            (hk.stage_all, self._stage_all_hotkey),
+            (hk.unstage_file, self.action_unstage_item),
+            (hk.unstage_all, self._unstage_all_hotkey),
+            (hk.stage_hunk, self.action_stage_item),
+            (hk.stage_lines, self.action_stage_item),
+            (hk.revert_hunk, self.action_revert_item),
+            (hk.amend, self._toggle_amend_hotkey),
+            (hk.signoff, self._signoff_hotkey),
+            (hk.commit, self._perform_commit),
+            (hk.push, self._perform_push),
+        ]
+        for raw_hk, action_fn in hotkey_actions:
+            if not raw_hk:
+                continue
+            norm = normalize_textual_shortcut(raw_hk)
+            if event.key == norm or event.character == raw_hk:
+                if not in_editor or "+" in norm:
+                    event.stop()
+                    action_fn()
+                    return
+
+        if in_editor:
             return
         diff_list = self.query_one("#diff_list", DiffOptionList)
         if self.focused is diff_list and event.key in (

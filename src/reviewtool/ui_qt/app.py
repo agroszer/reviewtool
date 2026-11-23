@@ -79,6 +79,7 @@ class MainWindow(QMainWindow):
         self._updating_lists = False
         self._bg_processes: list[QProcess] = []
         self._rescan_worker: RescanWorker | None = None
+        self._hotkeys: list[QShortcut] = []
 
         self.setWindowTitle(
             f"reviewtool — {session.vcs.repo_root.name} ({session.vcs.name})"
@@ -101,7 +102,7 @@ class MainWindow(QMainWindow):
         root_layout.setSpacing(6)
 
         toolbar = QHBoxLayout()
-        self.btn_rescan = QPushButton("Rescan (F5)")
+        self.btn_rescan = QPushButton("Rescan")
         self.btn_rescan.clicked.connect(self._on_rescan)
         toolbar.addWidget(self.btn_rescan)
 
@@ -342,18 +343,167 @@ class MainWindow(QMainWindow):
         self._save_geometry_asap()
 
     def _bind_global_shortcuts(self) -> None:
-        sc_rescan = QShortcut(QKeySequence("F5"), self)
-        sc_rescan.activated.connect(self._on_rescan)
-        sc_ctx_dec = QShortcut(QKeySequence("["), self)
-        sc_ctx_dec.activated.connect(lambda: self._on_adjust_context(-1))
-        sc_ctx_inc = QShortcut(QKeySequence("]"), self)
-        sc_ctx_inc.activated.connect(lambda: self._on_adjust_context(1))
+        for sc in self._hotkeys:
+            sc.setEnabled(False)
+            sc.deleteLater()
+        self._hotkeys.clear()
+
+        hk = self.session.config.hotkeys
+        button_bindings: list[tuple[QWidget, str, str, object, bool]] = [
+            (self.btn_rescan, "Rescan", hk.rescan, self._on_rescan, True),
+            (
+                self.btn_ctx_minus,
+                "-",
+                hk.context_minus,
+                lambda: self._on_adjust_context(-1),
+                False,
+            ),
+            (
+                self.btn_ctx_plus,
+                "+",
+                hk.context_plus,
+                lambda: self._on_adjust_context(1),
+                False,
+            ),
+            (
+                self.chk_full_file,
+                "Full File",
+                hk.full_file,
+                self.chk_full_file.toggle,
+                False,
+            ),
+            (
+                self.chk_hide_viewed,
+                "Hide Viewed",
+                hk.hide_viewed,
+                self.chk_hide_viewed.toggle,
+                False,
+            ),
+            (
+                self.btn_tools,
+                "External Tools",
+                hk.tools,
+                self.btn_tools.showMenu,
+                False,
+            ),
+            (
+                self.btn_options,
+                "Options...",
+                hk.options,
+                self._on_open_options,
+                False,
+            ),
+            (
+                self.btn_stage_file,
+                "Stage",
+                hk.stage_file,
+                self._on_stage_selected_file,
+                False,
+            ),
+            (
+                self.btn_stage_all,
+                "Stage All",
+                hk.stage_all,
+                self._on_stage_all,
+                True,
+            ),
+            (
+                self.btn_unstage_file,
+                "Unstage",
+                hk.unstage_file,
+                self._on_unstage_selected_file,
+                False,
+            ),
+            (
+                self.btn_unstage_all,
+                "Unstage All",
+                hk.unstage_all,
+                self._on_unstage_all,
+                True,
+            ),
+            (
+                self.btn_stage_hunk,
+                "Stage Hunk",
+                hk.stage_hunk,
+                self._on_btn_stage_hunk,
+                False,
+            ),
+            (
+                self.btn_stage_lines,
+                "Stage Lines",
+                hk.stage_lines,
+                self._on_btn_stage_lines,
+                False,
+            ),
+            (
+                self.btn_revert_hunk,
+                "Revert Hunk",
+                hk.revert_hunk,
+                self._on_btn_revert_hunk,
+                False,
+            ),
+            (
+                self.chk_amend,
+                "Amend Last Commit",
+                hk.amend,
+                self.chk_amend.toggle,
+                True,
+            ),
+            (
+                self.btn_signoff,
+                "Sign Off",
+                hk.signoff,
+                self._on_signoff,
+                True,
+            ),
+            (
+                self.btn_commit,
+                "Commit",
+                hk.commit,
+                self._on_commit,
+                True,
+            ),
+            (
+                self.btn_push,
+                "Push",
+                hk.push,
+                self._on_push,
+                True,
+            ),
+        ]
+        for widget, label, key_str, callback, allow_in_editor in button_bindings:
+            if key_str:
+                widget.setToolTip(f"{label} ({key_str})")
+                sc = QShortcut(QKeySequence(key_str), self)
+                sc.activated.connect(
+                    self._make_hotkey_cb(callback, key_str, allow_in_editor)
+                )
+                self._hotkeys.append(sc)
+            else:
+                widget.setToolTip(label)
+
         for seq in ("n", "Alt+Down", "Ctrl+Down"):
             sc_next = QShortcut(QKeySequence(seq), self)
             sc_next.activated.connect(lambda: self._on_step_unstaged(1))
+            self._hotkeys.append(sc_next)
         for seq in ("p", "Alt+Up", "Ctrl+Up"):
             sc_prev = QShortcut(QKeySequence(seq), self)
             sc_prev.activated.connect(lambda: self._on_step_unstaged(-1))
+            self._hotkeys.append(sc_prev)
+
+    def _make_hotkey_cb(
+        self, callback, key_str: str, allow_in_editor: bool
+    ):
+        def _invoke() -> None:
+            if (
+                not allow_in_editor
+                and self.txt_commit.hasFocus()
+                and "+" not in key_str
+            ):
+                return
+            callback()
+
+        return _invoke
 
     def _on_step_unstaged(self, delta: int) -> None:
         if self.txt_commit.hasFocus():
@@ -743,6 +893,7 @@ class MainWindow(QMainWindow):
         self._restoring_ui = True
         self.chk_hide_viewed.setChecked(self.session.hide_viewed)
         self._restoring_ui = False
+        self._bind_global_shortcuts()
         self._apply_fonts()
         self._refresh_file_lists()
         self._refresh_diff_pane()

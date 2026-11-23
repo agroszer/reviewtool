@@ -1,7 +1,7 @@
 """Split INI configuration management (config.ini and tools.ini)."""
 
 import configparser
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import cast
 
@@ -239,6 +239,27 @@ COLOR_SCHEME_PRESETS: tuple[tuple[str, str, ColorSchemeConfig], ...] = (
     ("high_contrast", "VS Code High Contrast", HIGH_CONTRAST_COLOR_SCHEME),
 )
 
+HOTKEY_FIELDS: tuple[tuple[str, str], ...] = (
+    ("rescan", "Rescan"),
+    ("context_minus", "Context -"),
+    ("context_plus", "Context +"),
+    ("full_file", "Full File"),
+    ("hide_viewed", "Hide Viewed"),
+    ("tools", "External Tools"),
+    ("options", "Options"),
+    ("stage_file", "Stage"),
+    ("stage_all", "Stage All"),
+    ("unstage_file", "Unstage"),
+    ("unstage_all", "Unstage All"),
+    ("stage_hunk", "Stage/Unstage Hunk"),
+    ("stage_lines", "Stage/Unstage Lines"),
+    ("revert_hunk", "Revert Hunk"),
+    ("amend", "Amend Last Commit"),
+    ("signoff", "Sign Off"),
+    ("commit", "Commit"),
+    ("push", "Push"),
+)
+
 
 def get_preset_color_scheme(name: str) -> ColorSchemeConfig:
     """Return a copy of the named preset ColorSchemeConfig."""
@@ -267,6 +288,30 @@ def get_preset_color_scheme(name: str) -> ColorSchemeConfig:
         del_fg=base.del_fg,
         is_dark=base.is_dark,
     )
+
+
+@dataclass
+class HotkeyConfig:
+    """Configurable keyboard shortcuts for buttons on the main form."""
+
+    rescan: str = "F5"
+    context_minus: str = "["
+    context_plus: str = "]"
+    full_file: str = "f"
+    hide_viewed: str = "h"
+    tools: str = "t"
+    options: str = "o"
+    stage_file: str = "s"
+    stage_all: str = "Ctrl+Shift+S"
+    unstage_file: str = "u"
+    unstage_all: str = "Ctrl+Shift+U"
+    stage_hunk: str = "k"
+    stage_lines: str = "l"
+    revert_hunk: str = "r"
+    amend: str = "Ctrl+M"
+    signoff: str = "Ctrl+Shift+O"
+    commit: str = "Ctrl+Return"
+    push: str = "Ctrl+P"
 
 
 @dataclass
@@ -301,6 +346,7 @@ class ConfigManager:
         self.general = GeneralConfig()
         self.qt_geometry = QtGeometryConfig()
         self.colors = ColorSchemeConfig()
+        self.hotkeys = HotkeyConfig()
         self.tools: list[ToolSpec] = []
 
     def load(self) -> None:
@@ -399,6 +445,12 @@ class ConfigManager:
             if len(left_sp) == 3:
                 self.qt_geometry.left_splitter = left_sp
 
+        if parser.has_section("hotkeys"):
+            hsec = parser["hotkeys"]
+            for fld in asdict(self.hotkeys):
+                if fld in hsec:
+                    setattr(self.hotkeys, fld, hsec.get(fld, "").strip())
+
     def save_general(self) -> None:
         """Persist generic options and Qt geometry to config.ini immediately."""
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -449,6 +501,8 @@ class ConfigManager:
         if self.qt_geometry.window_y is not None:
             ui_qt_dict["window_y"] = str(self.qt_geometry.window_y)
         parser["ui_qt"] = ui_qt_dict
+
+        parser["hotkeys"] = asdict(self.hotkeys)
 
         with self.config_path.open("w", encoding="utf-8") as fh:
             parser.write(fh)
