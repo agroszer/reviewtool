@@ -67,6 +67,7 @@ class DiffOptionList(OptionList):
         self.selected_lines_by_hunk: dict[int, set[int]] = {}
         self.word_col: int = 1
         self._active_row_idx: int = 0
+        self._lexer: Lexer = get_lexer_for_path("")
 
     def render_file_diff(
         self,
@@ -74,9 +75,11 @@ class DiffOptionList(OptionList):
         render_mode: RenderMode,
         colors: ColorSchemeConfig | None = None,
         dark_theme: bool = True,
+        reset_cursor: bool = False,
     ) -> None:
         """Populate the OptionList with styled Rich Text lines."""
-        prev_idx = self.highlighted
+        prev_idx = 0 if reset_cursor else self.highlighted
+        saved_scroll_y = 0.0 if reset_cursor else self.scroll_y
         self.clear_options()
         self.rows.clear()
         self.selected_lines_by_hunk.clear()
@@ -98,7 +101,7 @@ class DiffOptionList(OptionList):
             self._add_info(f"No diff hunks for {file_diff.path}.")
             return
 
-        lexer = get_lexer_for_path(file_diff.path)
+        self._lexer = get_lexer_for_path(file_diff.path)
         dividers = {
             d.before_hunk_index: d for d in compute_expand_dividers(file_diff)
         }
@@ -107,18 +110,26 @@ class DiffOptionList(OptionList):
         options: list[Option] = []
         for h_idx, hunk in enumerate(file_diff.hunks):
             if h_idx in dividers:
-                options.append(self._build_divider_option(dividers[h_idx]))
-            options.append(self._build_hunk_header_option(h_idx, hunk.header))
+                options.append(
+                    self._build_divider_option(dividers[h_idx], len(self.rows))
+                )
+            options.append(
+                self._build_hunk_header_option(
+                    h_idx, hunk.header, len(self.rows)
+                )
+            )
             for l_idx, dline in enumerate(hunk.lines):
                 options.append(
                     self._build_diff_line_option(
-                        h_idx, l_idx, dline, lexer, len(self.rows)
+                        h_idx, l_idx, dline, self._lexer, len(self.rows)
                     )
                 )
 
         trailing = len(file_diff.hunks)
         if trailing in dividers:
-            options.append(self._build_divider_option(dividers[trailing]))
+            options.append(
+                self._build_divider_option(dividers[trailing], len(self.rows))
+            )
 
         self.add_options(options)
         if self.option_count > 0:
@@ -127,29 +138,54 @@ class DiffOptionList(OptionList):
                 if prev_idx is not None
                 else 0
             )
+            self._active_row_idx = target
             self.highlighted = target
+            if not reset_cursor and self.is_mounted:
+                self.scroll_to(y=saved_scroll_y, animate=False)
+                self.scroll_to_highlight()
 
     def _add_info(self, text: str) -> None:
         self.rows.append(TuiDiffRow(row_kind="info", raw_code=text))
         self.add_option(Option(Text(text, style="italic dim")))
 
-    def _build_divider_option(self, divider: ExpandDivider) -> Option:
+    def _render_banner_text(
+        self, text: str, fg: str, bg: str, row_index: int
+    ) -> Text:
+        is_active = row_index == self._active_row_idx
+        mark = "▶" if is_active else " "
+        full = self._pad_full_width(f"{mark}{text}")
+        if not is_active:
+            return Text(full, style=Style(color=fg, bgcolor=bg, bold=True))
+        pos = max(1, min(len(full) - 1, self.word_col))
+        rich = Text()
+        base_style = Style(color=fg, bgcolor=bg, bold=True)
+        cur_style = Style(color=fg, bgcolor=bg, bold=True, reverse=True)
+        rich.append(full[:pos], style=base_style)
+        rich.append(full[pos : pos + 1], style=cur_style)
+        rich.append(full[pos + 1 :], style=base_style)
+        return rich
+
+    def _build_divider_option(
+        self, divider: ExpandDivider, row_index: int = -1
+    ) -> Option:
         label = (
-            f"  [ ↕ Press Enter to expand {divider.hidden_count} hidden lines "
+            f" [ ↕ Press Enter to expand {divider.hidden_count} hidden lines "
             f"({divider.new_start}..{divider.new_end}) ]  "
         )
         self.rows.append(
             TuiDiffRow(row_kind="divider", divider=divider, raw_code=label)
         )
-        div_style = Style(
-            color=self.color_scheme.divider_fg,
-            bgcolor=self.color_scheme.divider_bg,
-            bold=True,
+        return Option(
+            self._render_banner_text(
+                label,
+                self.color_scheme.divider_fg,
+                self.color_scheme.divider_bg,
+                row_index,
+            )
         )
-        return Option(Text(self._pad_full_width(label), style=div_style))
 
     def _build_hunk_header_option(
-        self, hunk_index: int, header_text: str
+        self, hunk_index: int, header_text: str, row_index: int = -1
     ) -> Option:
         self.rows.append(
             TuiDiffRow(
@@ -158,12 +194,14 @@ class DiffOptionList(OptionList):
                 raw_code=header_text,
             )
         )
-        hunk_style = Style(
-            color=self.color_scheme.hunk_fg,
-            bgcolor=self.color_scheme.hunk_bg,
-            bold=True,
+        return Option(
+            self._render_banner_text(
+                f" {header_text}",
+                self.color_scheme.hunk_fg,
+                self.color_scheme.hunk_bg,
+                row_index,
+            )
         )
-        return Option(Text(self._pad_full_width(header_text), style=hunk_style))
 
     def _pad_full_width(self, text: str) -> str:
         region_w = self.scrollable_content_region.width
@@ -174,14 +212,14 @@ class DiffOptionList(OptionList):
             return text + (" " * (width - len(text)))
         return text
 
-    def _build_diff_line_option(
+    def _render_diff_line_text(
         self,
         hunk_index: int,
         line_index: int,
         dline: DiffLine,
         lexer: Lexer,
         row_index: int = -1,
-    ) -> Option:
+    ) -> Text:
         is_sel = line_index in self.selected_lines_by_hunk.get(
             hunk_index, set()
         )
@@ -320,17 +358,64 @@ class DiffOptionList(OptionList):
                 " " * (target_width - cur_len),
                 style=Style(bgcolor=line_bg),
             )
+        return rich_line
 
+    def _build_diff_line_option(
+        self,
+        hunk_index: int,
+        line_index: int,
+        dline: DiffLine,
+        lexer: Lexer,
+        row_index: int = -1,
+    ) -> Option:
+        rich_line = self._render_diff_line_text(
+            hunk_index, line_index, dline, lexer, row_index
+        )
         self.rows.append(
             TuiDiffRow(
                 row_kind="line",
                 hunk_index=hunk_index,
                 line_index=line_index,
                 diff_line=dline,
-                raw_code=code,
+                raw_code=dline.text,
             )
         )
         return Option(rich_line)
+
+    def _refresh_row_at(self, idx: int) -> None:
+        if idx < 0 or idx >= len(self.rows) or idx >= self.option_count:
+            return
+        row = self.rows[idx]
+        if (
+            row.row_kind == "line"
+            and row.hunk_index is not None
+            and row.line_index is not None
+            and row.diff_line is not None
+        ):
+            prompt = self._render_diff_line_text(
+                row.hunk_index,
+                row.line_index,
+                row.diff_line,
+                self._lexer,
+                idx,
+            )
+            self.replace_option_prompt_at_index(idx, prompt)
+        elif row.row_kind == "divider":
+            prompt = self._render_banner_text(
+                row.raw_code,
+                self.color_scheme.divider_fg,
+                self.color_scheme.divider_bg,
+                idx,
+            )
+            self.replace_option_prompt_at_index(idx, prompt)
+        elif row.row_kind == "hunk_header":
+            prompt = self._render_banner_text(
+                f" {row.raw_code}",
+                self.color_scheme.hunk_fg,
+                self.color_scheme.hunk_bg,
+                idx,
+            )
+            self.replace_option_prompt_at_index(idx, prompt)
 
     def current_row(self) -> TuiDiffRow | None:
         idx = self.highlighted
@@ -356,17 +441,8 @@ class DiffOptionList(OptionList):
             sel_set.remove(row.line_index)
         else:
             sel_set.add(row.line_index)
-        if self.file_diff is not None:
-            saved_sel = {
-                k: set(v) for k, v in self.selected_lines_by_hunk.items()
-            }
-            self.render_file_diff(
-                self.file_diff,
-                self.render_mode,
-                colors=self.color_scheme,
-                dark_theme=self.dark_theme,
-            )
-            self.selected_lines_by_hunk = saved_sel
+        if self.highlighted is not None:
+            self._refresh_row_at(self.highlighted)
         return True
 
     def copyable_text(self) -> str:
@@ -391,17 +467,31 @@ class DiffOptionList(OptionList):
         return extract_word_at_column(row.raw_code, self.word_col)
 
     def refresh_active_cursor(self) -> None:
-        """Re-render active row indicator and block cursor when row/col moves."""
-        if self.file_diff is None:
+        """Re-render only the old and new active rows in-place when row/col moves."""
+        if self.file_diff is None or self.option_count == 0:
             return
-        saved_sel = {k: set(v) for k, v in self.selected_lines_by_hunk.items()}
-        self.render_file_diff(
-            self.file_diff,
-            self.render_mode,
-            colors=self.color_scheme,
-            dark_theme=self.dark_theme,
-        )
-        self.selected_lines_by_hunk = saved_sel
+        old_idx = self._active_row_idx
+        new_idx = self.highlighted if self.highlighted is not None else 0
+        self._active_row_idx = new_idx
+        if old_idx != new_idx:
+            self._refresh_row_at(old_idx)
+        self._refresh_row_at(new_idx)
+
+    def action_cursor_down(self) -> None:
+        """Move highlight down one line without wrapping around at the bottom."""
+        if self.option_count == 0:
+            return
+        cur = self.highlighted if self.highlighted is not None else 0
+        if cur + 1 < self.option_count:
+            self.highlighted = cur + 1
+
+    def action_cursor_up(self) -> None:
+        """Move highlight up one line without wrapping around at the top."""
+        if self.option_count == 0:
+            return
+        cur = self.highlighted if self.highlighted is not None else 0
+        if cur > 0:
+            self.highlighted = cur - 1
 
     def _current_line_len(self) -> int:
         row = self.current_row()

@@ -123,3 +123,11 @@ def test_tui_widgets_instantiate_and_render(tmp_path: Path) -> None:
     assert diff_pane.word_col == 5
     diff_pane.action_word_left()
     assert diff_pane.word_col == 1
+
+    diff_pane.highlighted = 0
+    diff_pane.action_cursor_up()
+    assert diff_pane.highlighted == 0
+    diff_pane.action_cursor_down()
+    assert diff_pane.highlighted == 1
+    diff_pane.action_cursor_down()
+    assert diff_pane.highlighted == 1
