@@ -367,6 +367,14 @@ class ReviewSession:
         self.vcs.amend_mode = amend
         self.rescan()
 
+    def format_commit_command(self, message: str, amend: bool = False) -> str:
+        """Return display command string for committing currently staged files."""
+        return self.vcs.format_commit_command(message, self.staged, amend=amend)
+
+    def format_push_command(self) -> str:
+        """Return display command string for pushing commits."""
+        return self.vcs.format_push_command()
+
     def commit(self, message: str, amend: bool = False) -> str:
         """Commit currently staged files and rescan repository status."""
         output = self.vcs.commit(message, self.staged, amend=amend)

@@ -1,7 +1,8 @@
 """Textual TUI frontend application for reviewtool."""
 
 from dataclasses import asdict
-from typing import cast
+import shlex
+from typing import Callable, cast
 
 from rich.text import Text
 from textual.app import App, ComposeResult
@@ -45,75 +46,108 @@ _THEME_CYCLE: tuple[str, ...] = tuple(p[0] for p in COLOR_SCHEME_PRESETS)
 
 
 class CommandOutputModal(ModalScreen[None]):
-    """Modal screen showing captured output from a VCS operation (commit/push)."""
+    """Modal screen showing a running command and its output/error when done."""
 
     BINDINGS = [
-        Binding("escape", "dismiss", "Close"),
-        Binding("q", "dismiss", "Close"),
+        Binding("escape", "close_if_done", "Close"),
+        Binding("q", "close_if_done", "Close"),
     ]
 
     def __init__(
-        self, title: str, output: str, is_error: bool = False
+        self,
+        cmd_str: str,
+        runner: Callable[[], tuple[str, bool]] | None = None,
+        output: str = "",
+        is_error: bool = False,
+        on_done: Callable[[str, bool], None] | None = None,
     ) -> None:
         super().__init__()
-        self.modal_title = title
+        self.cmd_str = cmd_str
+        self.runner = runner
         self.output = output
         self.is_error = is_error
+        self.on_done = on_done
+        self._done = runner is None
 
     def compose(self) -> ComposeResult:
-        status = "Failed" if self.is_error else "Succeeded"
         with Vertical(id="modal_box"):
-            yield Label(f"{self.modal_title} — {status}")
+            yield Label(f"Running command {self.cmd_str}", id="modal_cmd_lbl")
+            yield LoadingIndicator(id="modal_spinner")
             log = RichLog(highlight=True, markup=False, id="modal_log")
             yield log
             yield Button(
-                "Close (Esc)", id="btn_close_cmd_modal", variant="primary"
+                "Close (Esc)",
+                id="btn_close_cmd_modal",
+                variant="primary",
+                disabled=not self._done,
             )
 
     def on_mount(self) -> None:
+        if self.runner is None:
+            self._show_result(self.output, self.is_error)
+            return
+
+        def _worker() -> None:
+            assert self.runner is not None
+            out, err = self.runner()
+            self.app.call_from_thread(self._show_result, out, err)
+
+        self.run_worker(_worker, thread=True, exclusive=False)
+
+    def _show_result(self, output: str, is_error: bool) -> None:
+        self._done = True
+        self.output = output
+        self.is_error = is_error
+        self.query_one("#modal_spinner", LoadingIndicator).display = False
+        status = "Failed" if is_error else "Succeeded"
+        self.query_one("#modal_cmd_lbl", Label).update(
+            f"Running command {self.cmd_str} — {status}"
+        )
         log = self.query_one("#modal_log", RichLog)
-        text = self.output.strip() or "(no output)"
+        log.clear()
+        text = output.strip() or "(no output)"
         log.write(text)
+        btn = self.query_one("#btn_close_cmd_modal", Button)
+        btn.disabled = False
+        btn.focus()
+        if self.on_done is not None:
+            self.on_done(output, is_error)
+
+    def action_close_if_done(self) -> None:
+        if self._done:
+            self.dismiss(None)
 
     def on_button_pressed(self, _event: Button.Pressed) -> None:
-        self.dismiss(None)
+        if self._done:
+            self.dismiss(None)
 
 
-class ToolOutputModal(ModalScreen[None]):
+class ToolOutputModal(CommandOutputModal):
     """Modal screen showing captured stdout/stderr from an external tool."""
 
-    BINDINGS = [
-        Binding("escape", "dismiss", "Close"),
-        Binding("q", "dismiss", "Close"),
-    ]
-
     def __init__(self, result: ToolRunResult) -> None:
-        super().__init__()
+        cmd_str = shlex.join(result.argv)
+        out = self.format_result(result)
+        super().__init__(
+            cmd_str=cmd_str,
+            output=out,
+            is_error=bool(result.returncode),
+        )
         self.result = result
 
-    def compose(self) -> ComposeResult:
-        cmd_str = " ".join(self.result.argv)
-        with Vertical(id="modal_box"):
-            yield Label(
-                f"Tool: {self.result.tool.name} | Exit: {self.result.returncode}\n"
-                f"Command: {cmd_str}"
-            )
-            log = RichLog(highlight=True, markup=False, id="modal_log")
-            yield log
-            yield Button("Close (Esc)", id="btn_close_modal", variant="primary")
-
-    def on_mount(self) -> None:
-        log = self.query_one("#modal_log", RichLog)
-        if self.result.stdout:
-            log.write(self.result.stdout.rstrip("\n"))
-        if self.result.stderr:
-            log.write("--- stderr ---")
-            log.write(self.result.stderr.rstrip("\n"))
-        if not self.result.stdout and not self.result.stderr:
-            log.write("(no output)")
-
-    def on_button_pressed(self, _event: Button.Pressed) -> None:
-        self.dismiss(None)
+    @staticmethod
+    def format_result(result: ToolRunResult) -> str:
+        parts: list[str] = [
+            f"Tool: {result.tool.name} | Exit: {result.returncode}"
+        ]
+        if result.stdout:
+            parts.append(result.stdout.rstrip("\n"))
+        if result.stderr:
+            parts.append("--- stderr ---")
+            parts.append(result.stderr.rstrip("\n"))
+        if not result.stdout and not result.stderr:
+            parts.append("(no output)")
+        return "\n".join(parts)
 
 
 class ToolsMenuModal(ModalScreen[ToolSpec | None]):
@@ -453,6 +487,10 @@ class ReviewTuiApp(App[int]):
         height: 1fr;
         margin: 1 0;
     }
+    #modal_spinner {
+        height: 1;
+        width: 16;
+    }
     """
 
     BINDINGS = [
@@ -777,24 +815,15 @@ class ReviewTuiApp(App[int]):
         self._refresh_all()
 
     def _perform_push(self) -> None:
-        self._set_loading(True, "Pushing to remote...")
+        cmd_str = self.session.format_push_command()
 
-        def _worker() -> None:
+        def _runner() -> tuple[str, bool]:
             try:
-                out = self.session.push()
+                return self.session.push(), False
             except VCSError as exc:
-                self.call_from_thread(self._finish_async_push, str(exc), True)
-                return
-            self.call_from_thread(self._finish_async_push, out, False)
+                return str(exc), True
 
-        self.run_worker(_worker, thread=True, exclusive=True)
-
-    def _finish_async_push(self, output: str, is_error: bool) -> None:
-        self._set_loading(False)
-        title = "Push Failed" if is_error else "Push Output"
-        self.push_screen(
-            CommandOutputModal(title, output, is_error=is_error)
-        )
+        self.push_screen(CommandOutputModal(cmd_str, runner=_runner))
 
     def _perform_commit(self) -> None:
         commit_input = self.query_one("#commit_input", TextArea)
@@ -803,31 +832,24 @@ class ReviewTuiApp(App[int]):
         if self.session.vcs.supports_amend:
             chk = self.query_one("#chk_amend", Checkbox)
             amend = chk.value
-        self._set_loading(True, "Committing (running hooks)...")
+        cmd_str = self.session.format_commit_command(msg, amend=amend)
 
-        def _worker() -> None:
+        def _runner() -> tuple[str, bool]:
             try:
-                out = self.session.commit(msg, amend=amend)
+                return self.session.commit(msg, amend=amend), False
             except VCSError as exc:
                 self.session.rescan()
-                self.call_from_thread(
-                    self._finish_async_commit, str(exc), True
-                )
-                return
-            self.call_from_thread(self._finish_async_commit, out, False)
+                return str(exc), True
 
-        self.run_worker(_worker, thread=True, exclusive=True)
+        def _on_done(_output: str, is_error: bool) -> None:
+            if not is_error:
+                self.query_one("#commit_input", TextArea).text = ""
+                if self.session.vcs.supports_amend:
+                    self.query_one("#chk_amend", Checkbox).value = False
+            self._refresh_all()
 
-    def _finish_async_commit(self, output: str, is_error: bool) -> None:
-        self._set_loading(False)
-        if not is_error:
-            self.query_one("#commit_input", TextArea).text = ""
-            if self.session.vcs.supports_amend:
-                self.query_one("#chk_amend", Checkbox).value = False
-        self._refresh_all()
-        title = "Commit Failed" if is_error else "Commit Output"
         self.push_screen(
-            CommandOutputModal(title, output, is_error=is_error)
+            CommandOutputModal(cmd_str, runner=_runner, on_done=_on_done)
         )
 
     def action_rescan(self) -> None:
@@ -1066,11 +1088,36 @@ class ReviewTuiApp(App[int]):
             return
         cwd = self.session.vcs.repo_root
 
+        if tool.mode == "output":
+            cmd_str = shlex.join(argv)
+
+            def _runner() -> tuple[str, bool]:
+                try:
+                    res = run_tool_output(tool, argv, cwd)
+                except FileNotFoundError as exc:
+                    return f"Tool not found: {exc}", True
+                return (
+                    ToolOutputModal.format_result(res),
+                    bool(res.returncode),
+                )
+
+            def _on_done(_output: str, _is_error: bool) -> None:
+                if tool.refresh_after:
+                    if self.session.current_entry is not None:
+                        self.session.refresh_single_file(
+                            self.session.current_entry.path
+                        )
+                        self._refresh_all()
+                    else:
+                        self.action_rescan()
+
+            self.push_screen(
+                CommandOutputModal(cmd_str, runner=_runner, on_done=_on_done)
+            )
+            return
+
         try:
-            if tool.mode == "output":
-                res = run_tool_output(tool, argv, cwd)
-                self.push_screen(ToolOutputModal(res))
-            elif tool.mode == "terminal":
+            if tool.mode == "terminal":
                 with self.suspend():
                     run_tool_terminal_blocking(tool, argv, cwd)
             else:

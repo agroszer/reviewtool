@@ -1,6 +1,7 @@
 """PyQt6 main application window for reviewtool."""
 
 import os
+import shlex
 import sys
 from typing import cast
 
@@ -71,7 +72,7 @@ class RescanWorker(QThread):
 
 
 class VcsActionWorker(QThread):
-    """Background worker thread for commit/push (including pre-commit hooks)."""
+    """Background worker thread for commit/push or tool/output execution."""
 
     succeeded = pyqtSignal(str)
     failed = pyqtSignal(str)
@@ -83,7 +84,7 @@ class VcsActionWorker(QThread):
     def run(self) -> None:
         try:
             out = self.fn()
-        except VCSError as exc:
+        except (VCSError, FileNotFoundError) as exc:
             self.failed.emit(str(exc))
             return
         self.succeeded.emit(out)
@@ -1063,16 +1064,28 @@ class MainWindow(QMainWindow):
             return
         msg = self.txt_commit.toPlainText().strip()
         amend = self.chk_amend.isChecked()
-        self._set_action_busy(True, "Committing (running hooks)...")
+        cmd_str = self.session.format_commit_command(msg, amend=amend)
+        self._set_action_busy(True, f"Running command {cmd_str}")
+        dlg = CommandOutputDialog(cmd_str, running=True, parent=self)
 
         worker = VcsActionWorker(
             lambda: self.session.commit(msg, amend=amend), self
         )
-        worker.succeeded.connect(self._on_commit_succeeded)
-        worker.failed.connect(self._on_commit_failed)
+
+        def _on_ok(output: str) -> None:
+            dlg.set_result(output, is_error=False)
+            self._on_commit_succeeded(output)
+
+        def _on_err(err_msg: str) -> None:
+            dlg.set_result(err_msg, is_error=True)
+            self._on_commit_failed(err_msg)
+
+        worker.succeeded.connect(_on_ok)
+        worker.failed.connect(_on_err)
         worker.finished.connect(worker.deleteLater)
         self._action_worker = worker
         worker.start()
+        dlg.exec()
 
     def _on_commit_succeeded(self, output: str) -> None:
         self._set_action_busy(False)
@@ -1084,7 +1097,6 @@ class MainWindow(QMainWindow):
         self._refresh_diff_pane()
         first_line = output.splitlines()[0] if output else "OK"
         self.status_bar.showMessage(f"Committed: {first_line}")
-        CommandOutputDialog("Commit Output", output, is_error=False, parent=self).exec()
 
     def _on_commit_failed(self, err_msg: str) -> None:
         self.session.rescan()
@@ -1092,30 +1104,39 @@ class MainWindow(QMainWindow):
         self._refresh_file_lists()
         self._refresh_diff_pane()
         self.status_bar.showMessage("Commit failed.")
-        CommandOutputDialog("Commit Failed", err_msg, is_error=True, parent=self).exec()
 
     def _on_push(self) -> None:
         if self._action_worker is not None and self._action_worker.isRunning():
             return
-        self._set_action_busy(True, "Pushing to remote...")
+        cmd_str = self.session.format_push_command()
+        self._set_action_busy(True, f"Running command {cmd_str}")
+        dlg = CommandOutputDialog(cmd_str, running=True, parent=self)
 
         worker = VcsActionWorker(self.session.push, self)
-        worker.succeeded.connect(self._on_push_succeeded)
-        worker.failed.connect(self._on_push_failed)
+
+        def _on_ok(output: str) -> None:
+            dlg.set_result(output, is_error=False)
+            self._on_push_succeeded(output)
+
+        def _on_err(err_msg: str) -> None:
+            dlg.set_result(err_msg, is_error=True)
+            self._on_push_failed(err_msg)
+
+        worker.succeeded.connect(_on_ok)
+        worker.failed.connect(_on_err)
         worker.finished.connect(worker.deleteLater)
         self._action_worker = worker
         worker.start()
+        dlg.exec()
 
     def _on_push_succeeded(self, output: str) -> None:
         self._set_action_busy(False)
         first_line = output.splitlines()[0] if output else "OK"
         self.status_bar.showMessage(f"Pushed: {first_line}")
-        CommandOutputDialog("Push Output", output, is_error=False, parent=self).exec()
 
-    def _on_push_failed(self, err_msg: str) -> None:
+    def _on_push_failed(self, _err_msg: str) -> None:
         self._set_action_busy(False)
         self.status_bar.showMessage("Push failed.")
-        CommandOutputDialog("Push Failed", err_msg, is_error=True, parent=self).exec()
 
     def _run_external_tool(self, tool: ToolSpec) -> None:
         argv = self.session.build_tool_argv(tool)
@@ -1125,14 +1146,25 @@ class MainWindow(QMainWindow):
         cwd = self.session.vcs.repo_root.resolve()
         os.chdir(cwd)
         if tool.mode == "output":
-            try:
+            cmd_str = shlex.join(argv)
+            dlg = CommandOutputDialog(cmd_str, running=True, parent=self)
+
+            def _run_tool() -> str:
                 res = run_tool_output(tool, argv, cwd)
-            except FileNotFoundError as exc:
-                QMessageBox.warning(
-                    self, "Tool Error", f"Executable not found: {exc}"
-                )
-                return
-            dlg = ToolOutputDialog(res, self)
+                out = ToolOutputDialog.format_result(res)
+                if res.returncode:
+                    raise VCSError(out)
+                return out
+
+            worker = VcsActionWorker(_run_tool, self)
+            worker.succeeded.connect(
+                lambda out: dlg.set_result(out, is_error=False)
+            )
+            worker.failed.connect(
+                lambda err: dlg.set_result(err, is_error=True)
+            )
+            worker.finished.connect(worker.deleteLater)
+            worker.start()
             dlg.exec()
             if tool.refresh_after:
                 self._on_rescan()

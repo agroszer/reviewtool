@@ -1,6 +1,7 @@
 """Git VCS backend wrapping the `git` CLI via subprocess."""
 
 import getpass
+import shlex
 import socket
 import subprocess
 from pathlib import Path
@@ -338,6 +339,20 @@ class GitBackend(VCSBackend):
             args.append("--index")
         args.append("-")
         self._run_git(args, input_text=patch)
+
+    def format_commit_command(
+        self,
+        message: str,
+        staged_entries: list[FileEntry],
+        amend: bool = False,
+    ) -> str:
+        args = ["git", "commit", "-m", message.strip()]
+        if amend:
+            args.append("--amend")
+        return shlex.join(args)
+
+    def format_push_command(self) -> str:
+        return "git push"
 
     def commit(
         self,

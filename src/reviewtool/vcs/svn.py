@@ -1,6 +1,7 @@
 """Subversion (SVN) VCS backend wrapping the `svn` CLI via subprocess."""
 
 import getpass
+import shlex
 import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -228,6 +229,24 @@ class SvnBackend(VCSBackend):
         if trailing_newline and updated_lines:
             new_content += "\n"
         abs_path.write_text(new_content, encoding="utf-8")
+
+    def format_commit_command(
+        self,
+        message: str,
+        staged_entries: list[FileEntry],
+        amend: bool = False,
+    ) -> str:
+        paths = [entry.path for entry in staged_entries]
+        args = [
+            "svn",
+            "--non-interactive",
+            "commit",
+            "-m",
+            message.strip(),
+            "--",
+            *paths,
+        ]
+        return shlex.join(args)
 
     def commit(
         self,

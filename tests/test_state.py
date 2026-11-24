@@ -5,9 +5,10 @@ from unittest.mock import MagicMock
 
 from reviewtool.cli import build_arg_parser, select_frontend
 from reviewtool.config import ConfigManager
-from reviewtool.models import DiffHunk, DiffLine, FileDiff, FileEntry
+from reviewtool.models import DiffHunk, DiffLine, FileDiff, FileEntry, ToolSpec
 from reviewtool.state import ReviewSession
-from reviewtool.ui_tui.app import ReviewTuiApp
+from reviewtool.tools import ToolRunResult
+from reviewtool.ui_tui.app import CommandOutputModal, ReviewTuiApp, ToolOutputModal
 from reviewtool.ui_tui.diff_pane import DiffOptionList
 from reviewtool.vcs.base import VCSBackend
 
@@ -131,3 +132,15 @@ def test_tui_widgets_instantiate_and_render(tmp_path: Path) -> None:
     assert diff_pane.highlighted == 1
     diff_pane.action_cursor_down()
     assert diff_pane.highlighted == 1
+
+    modal = CommandOutputModal("git push", runner=lambda: ("pushed", False))
+    assert modal.cmd_str == "git push"
+    assert modal._done is False
+
+    tool = ToolSpec(key="t", name="Test", command="echo hi", mode="output")
+    res = ToolRunResult(
+        tool=tool, argv=["echo", "hi"], returncode=0, stdout="hi\n", stderr=""
+    )
+    t_modal = ToolOutputModal(res)
+    assert t_modal.cmd_str == "echo hi"
+    assert "hi" in t_modal.output

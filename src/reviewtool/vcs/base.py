@@ -124,6 +124,19 @@ class VCSBackend(ABC):
     ) -> str:
         """Create a commit and return command output."""
 
+    def format_commit_command(
+        self,
+        message: str,
+        staged_entries: list[FileEntry],
+        amend: bool = False,
+    ) -> str:
+        """Return display command string for the commit operation."""
+        return f"{self.name} commit"
+
+    def format_push_command(self) -> str:
+        """Return display command string for the push operation."""
+        return f"{self.name} push"
+
     def push(self) -> str:
         """Push commits to the remote repository and return command output."""
         raise VCSError(f"{self.name} does not support push.")

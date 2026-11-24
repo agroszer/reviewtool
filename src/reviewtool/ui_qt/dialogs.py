@@ -1,6 +1,7 @@
 """PyQt6 dialogs for options configuration, tool output, and confirmations."""
 
 from dataclasses import asdict
+import shlex
 from typing import Callable, cast
 
 from PyQt6.QtGui import QColor, QFont
@@ -18,6 +19,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QSpinBox,
     QTabWidget,
@@ -32,41 +34,70 @@ from reviewtool.tools import ToolRunResult
 
 
 class CommandOutputDialog(QDialog):
-    """Modal dialog displaying output of a VCS operation (commit, push, pre-commit)."""
+    """Modal dialog displaying a running command and its output/error when done."""
 
     def __init__(
         self,
-        title: str,
-        output: str,
+        cmd_str: str,
+        output: str = "",
         is_error: bool = False,
+        running: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle(title)
+        self.cmd_str = cmd_str
+        self._running = running
+        self.setWindowTitle(f"Running command {cmd_str}")
         self.resize(760, 460)
 
         layout = QVBoxLayout(self)
-        status_text = "Failed" if is_error else "Succeeded"
-        header = QLabel(f"<b>{title} — {status_text}</b>")
-        layout.addWidget(header)
+        self.header = QLabel(f"<b>Running command {cmd_str}</b>", self)
+        self.header.setWordWrap(True)
+        layout.addWidget(self.header)
 
-        editor = QPlainTextEdit(self)
-        editor.setReadOnly(True)
+        self.progress = QProgressBar(self)
+        self.progress.setRange(0, 0)
+        self.progress.setFixedHeight(14)
+        self.progress.setTextVisible(False)
+        layout.addWidget(self.progress)
+
+        self.editor = QPlainTextEdit(self)
+        self.editor.setReadOnly(True)
         mono = QFont("Monospace", 10)
         mono.setStyleHint(QFont.StyleHint.Monospace)
-        editor.setFont(mono)
-        editor.setPlainText(output.strip() or "(no output)")
-        layout.addWidget(editor)
+        self.editor.setFont(mono)
+        layout.addWidget(self.editor)
 
-        buttons = QDialogButtonBox(
+        self.buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Close, self
         )
-        buttons.rejected.connect(self.reject)
-        buttons.accepted.connect(self.accept)
-        layout.addWidget(buttons)
+        self.buttons.rejected.connect(self.reject)
+        self.buttons.accepted.connect(self.accept)
+        layout.addWidget(self.buttons)
+
+        if running:
+            self.editor.setPlainText(f"Running command {cmd_str}...")
+            self.buttons.setEnabled(False)
+        else:
+            self.set_result(output, is_error)
+
+    def set_result(self, output: str, is_error: bool = False) -> None:
+        self._running = False
+        self.progress.setVisible(False)
+        status_text = "Failed" if is_error else "Succeeded"
+        self.setWindowTitle(f"Running command {self.cmd_str} — {status_text}")
+        self.header.setText(
+            f"<b>Running command {self.cmd_str} — {status_text}</b>"
+        )
+        self.editor.setPlainText(output.strip() or "(no output)")
+        self.buttons.setEnabled(True)
+
+    def reject(self) -> None:
+        if not self._running:
+            super().reject()
 
 
-class ToolOutputDialog(QDialog):
+class ToolOutputDialog(CommandOutputDialog):
     """Modal dialog displaying stdout, stderr, and exit code of an external tool."""
 
     def __init__(
@@ -74,43 +105,28 @@ class ToolOutputDialog(QDialog):
         result: ToolRunResult,
         parent: QWidget | None = None,
     ) -> None:
-        super().__init__(parent)
-        self.setWindowTitle(f"Tool Output: {result.tool.name}")
-        self.resize(820, 540)
-
-        layout = QVBoxLayout(self)
-        cmd_str = " ".join(result.argv)
-        header = QLabel(
-            f"<b>Command:</b> <code>{cmd_str}</code><br>"
-            f"<b>Exit Code:</b> {result.returncode}"
+        cmd_str = shlex.join(result.argv)
+        super().__init__(
+            cmd_str=cmd_str,
+            output=self.format_result(result),
+            is_error=bool(result.returncode),
+            running=False,
+            parent=parent,
         )
-        header.setWordWrap(True)
-        layout.addWidget(header)
 
-        editor = QPlainTextEdit(self)
-        editor.setReadOnly(True)
-        mono = QFont("Monospace", 10)
-        mono.setStyleHint(QFont.StyleHint.Monospace)
-        editor.setFont(mono)
-
-        combined: list[str] = []
+    @staticmethod
+    def format_result(result: ToolRunResult) -> str:
+        combined: list[str] = [
+            f"Tool: {result.tool.name} | Exit Code: {result.returncode}"
+        ]
         if result.stdout:
             combined.append(result.stdout.rstrip("\n"))
         if result.stderr:
-            if combined:
-                combined.append("\n--- stderr ---")
+            combined.append("--- stderr ---")
             combined.append(result.stderr.rstrip("\n"))
-        if not combined:
+        if not result.stdout and not result.stderr:
             combined.append("(no output)")
-        editor.setPlainText("\n".join(combined))
-        layout.addWidget(editor)
-
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Close, self
-        )
-        buttons.rejected.connect(self.reject)
-        buttons.accepted.connect(self.accept)
-        layout.addWidget(buttons)
+        return "\n".join(combined)
 
 
 _COLOR_FIELDS: tuple[tuple[str, str], ...] = (
