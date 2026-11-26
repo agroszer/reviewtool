@@ -8,6 +8,7 @@ from reviewtool.tools import (
     expand_tool_command,
     normalize_textual_shortcut,
     run_tool_output,
+    split_shortcuts,
 )
 
 
@@ -110,3 +111,14 @@ def test_normalize_textual_shortcut_modifiers() -> None:
     assert normalize_textual_shortcut("Ctrl+Shift+F") == "ctrl+F"
     assert normalize_textual_shortcut("Shift+F4") == "shift+f4"
     assert normalize_textual_shortcut("F12") == "f12"
+
+
+def test_split_shortcuts_comma_separated() -> None:
+    assert split_shortcuts("") == []
+    assert split_shortcuts("   ,  ") == []
+    assert split_shortcuts("F5") == ["F5"]
+    assert split_shortcuts("F5, Ctrl+R,  Alt+R ") == ["F5", "Ctrl+R", "Alt+R"]
+    assert [
+        normalize_textual_shortcut(s)
+        for s in split_shortcuts("Ctrl+Return, Ctrl+Enter, Alt+C")
+    ] == ["ctrl+enter", "ctrl+enter", "alt+c"]

@@ -67,7 +67,9 @@ class ReviewSession:
         """Perform an explicit full repository status scan and clear the diff cache."""
         self._diff_cache.clear()
         self._branch_cache = self.vcs.get_branch_or_info()
-        self.unstaged, self.staged = self.vcs.scan_status()
+        unstaged, staged = self.vcs.scan_status()
+        self.unstaged = sorted(unstaged, key=lambda e: e.path)
+        self.staged = sorted(staged, key=lambda e: e.path)
 
         active_paths = {e.path for e in self.unstaged} | {
             e.path for e in self.staged
@@ -136,17 +138,10 @@ class ReviewSession:
         rel_path: str,
         new_entry: FileEntry | None,
     ) -> list[FileEntry]:
-        result: list[FileEntry] = []
-        replaced = False
-        for item in entries:
-            if item.path == rel_path:
-                if new_entry is not None and not replaced:
-                    result.append(new_entry)
-                    replaced = True
-            else:
-                result.append(item)
-        if new_entry is not None and not replaced:
+        result = [item for item in entries if item.path != rel_path]
+        if new_entry is not None:
             result.append(new_entry)
+            result.sort(key=lambda e: e.path)
         return result
 
     def _invalidate_file_cache(self, rel_path: str) -> None:

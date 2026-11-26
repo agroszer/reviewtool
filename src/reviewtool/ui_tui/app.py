@@ -37,6 +37,7 @@ from reviewtool.tools import (
     run_tool_background,
     run_tool_output,
     run_tool_terminal_blocking,
+    split_shortcuts,
 )
 from reviewtool.ui_tui.diff_pane import DiffOptionList
 from reviewtool.vcs.base import VCSError
@@ -71,7 +72,7 @@ class CommandOutputModal(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="modal_box"):
-            yield Label(f"Running command {self.cmd_str}", id="modal_cmd_lbl")
+            yield Label("Running command", id="modal_cmd_lbl")
             yield LoadingIndicator(id="modal_spinner")
             log = RichLog(highlight=True, markup=False, id="modal_log")
             yield log
@@ -86,6 +87,7 @@ class CommandOutputModal(ModalScreen[None]):
         if self.runner is None:
             self._show_result(self.output, self.is_error)
             return
+        self.query_one("#modal_log", RichLog).write(f"$ {self.cmd_str}")
 
         def _worker() -> None:
             assert self.runner is not None
@@ -101,12 +103,12 @@ class CommandOutputModal(ModalScreen[None]):
         self.query_one("#modal_spinner", LoadingIndicator).display = False
         status = "Failed" if is_error else "Succeeded"
         self.query_one("#modal_cmd_lbl", Label).update(
-            f"Running command {self.cmd_str} — {status}"
+            f"Running command — {status}"
         )
         log = self.query_one("#modal_log", RichLog)
         log.clear()
         text = output.strip() or "(no output)"
-        log.write(text)
+        log.write(f"$ {self.cmd_str}\n\n{text}")
         btn = self.query_one("#btn_close_cmd_modal", Button)
         btn.disabled = False
         btn.focus()
@@ -272,6 +274,9 @@ class OptionsModal(ModalScreen[None]):
                         )
                 with TabPane("Keys", id="tab_keys"):
                     hk_dict = asdict(self.session.config.hotkeys)
+                    yield Label(
+                        "Comma-separated for multiple hotkeys (e.g. F5, Ctrl+R)"
+                    )
                     with VerticalScroll(id="keys_scroll"):
                         for hk_key, hk_label in HOTKEY_FIELDS:
                             with Horizontal(classes="opt_row"):
@@ -1048,14 +1053,13 @@ class ReviewTuiApp(App[int]):
             (hk.push, self._perform_push),
         ]
         for raw_hk, action_fn in hotkey_actions:
-            if not raw_hk:
-                continue
-            norm = normalize_textual_shortcut(raw_hk)
-            if event.key == norm or event.character == raw_hk:
-                if not in_editor or "+" in norm:
-                    event.stop()
-                    action_fn()
-                    return
+            for single_hk in split_shortcuts(raw_hk):
+                norm = normalize_textual_shortcut(single_hk)
+                if event.key == norm or event.character == single_hk:
+                    if not in_editor or "+" in norm:
+                        event.stop()
+                        action_fn()
+                        return
 
         if in_editor:
             return
@@ -1072,15 +1076,14 @@ class ReviewTuiApp(App[int]):
             return
 
         for tool in self.session.config.tools:
-            if not tool.shortcut:
-                continue
-            norm = normalize_textual_shortcut(tool.shortcut)
-            if event.key == norm or event.character == tool.shortcut:
-                diff_list = self.query_one("#diff_list", DiffOptionList)
-                if self.focused is diff_list or "+" in norm:
-                    event.stop()
-                    self._execute_tool(tool)
-                    return
+            for single_sc in split_shortcuts(tool.shortcut):
+                norm = normalize_textual_shortcut(single_sc)
+                if event.key == norm or event.character == single_sc:
+                    diff_list = self.query_one("#diff_list", DiffOptionList)
+                    if self.focused is diff_list or "+" in norm:
+                        event.stop()
+                        self._execute_tool(tool)
+                        return
 
     def _execute_tool(self, tool: ToolSpec) -> None:
         argv = self.session.build_tool_argv(tool)

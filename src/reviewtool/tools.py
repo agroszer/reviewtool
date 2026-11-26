@@ -224,6 +224,11 @@ _TUI_KEY_ALIASES: dict[str, str] = {
 }
 
 
+def split_shortcuts(raw: str) -> list[str]:
+    """Split a comma-separated shortcut string into individual bindings."""
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
 def normalize_textual_shortcut(shortcut: str) -> str:
     """Normalize an INI shortcut (e.g. `Ctrl+Shift+E`, `Alt+G`) to Textual syntax."""
     raw = shortcut.strip()

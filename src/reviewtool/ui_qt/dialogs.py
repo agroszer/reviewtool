@@ -47,11 +47,11 @@ class CommandOutputDialog(QDialog):
         super().__init__(parent)
         self.cmd_str = cmd_str
         self._running = running
-        self.setWindowTitle(f"Running command {cmd_str}")
+        self.setWindowTitle("Running command")
         self.resize(760, 460)
 
         layout = QVBoxLayout(self)
-        self.header = QLabel(f"<b>Running command {cmd_str}</b>", self)
+        self.header = QLabel("<b>Running command</b>", self)
         self.header.setWordWrap(True)
         layout.addWidget(self.header)
 
@@ -76,7 +76,7 @@ class CommandOutputDialog(QDialog):
         layout.addWidget(self.buttons)
 
         if running:
-            self.editor.setPlainText(f"Running command {cmd_str}...")
+            self.editor.setPlainText(f"$ {cmd_str}\n\nRunning...")
             self.buttons.setEnabled(False)
         else:
             self.set_result(output, is_error)
@@ -85,11 +85,10 @@ class CommandOutputDialog(QDialog):
         self._running = False
         self.progress.setVisible(False)
         status_text = "Failed" if is_error else "Succeeded"
-        self.setWindowTitle(f"Running command {self.cmd_str} — {status_text}")
-        self.header.setText(
-            f"<b>Running command {self.cmd_str} — {status_text}</b>"
-        )
-        self.editor.setPlainText(output.strip() or "(no output)")
+        self.setWindowTitle(f"Running command — {status_text}")
+        self.header.setText(f"<b>Running command — {status_text}</b>")
+        body = output.strip() or "(no output)"
+        self.editor.setPlainText(f"$ {self.cmd_str}\n\n{body}")
         self.buttons.setEnabled(True)
 
     def reject(self) -> None:
@@ -278,12 +277,14 @@ class OptionsDialog(QDialog):
 
         keys_tab = QWidget(self)
         keys_layout = QVBoxLayout(keys_tab)
-        hotkey_group = QGroupBox("Button Hotkeys", keys_tab)
+        hotkey_group = QGroupBox(
+            "Button Hotkeys (comma-separated for multiple)", keys_tab
+        )
         h_form = QFormLayout(hotkey_group)
         hk_dict = asdict(self.session.config.hotkeys)
         for hk_key, hk_label in HOTKEY_FIELDS:
             hk_edit = QLineEdit(hk_dict[hk_key])
-            hk_edit.editingFinished.connect(
+            hk_edit.textChanged.connect(
                 self._make_hotkey_edit_cb(hk_key, hk_edit)
             )
             h_form.addRow(f"{hk_label}:", hk_edit)
@@ -362,8 +363,8 @@ class OptionsDialog(QDialog):
 
     def _make_hotkey_edit_cb(
         self, key: str, edit: QLineEdit
-    ) -> Callable[[], None]:
-        def _cb() -> None:
+    ) -> Callable[..., None]:
+        def _cb(*_args: object) -> None:
             if not self._syncing:
                 setattr(
                     self.session.config.hotkeys, key, edit.text().strip()

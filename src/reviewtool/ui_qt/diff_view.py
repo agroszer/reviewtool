@@ -38,6 +38,7 @@ from reviewtool.models import (
     ToolSpec,
 )
 from reviewtool.syntax import get_lexer_for_path, tokenize_line
+from reviewtool.tools import split_shortcuts
 
 
 @dataclass
@@ -308,27 +309,30 @@ class DiffViewWidget(QPlainTextEdit):
         self.tools = list(tools)
         for sc in self._tool_shortcuts:
             sc.setEnabled(False)
+            sc.setKey(QKeySequence())
             sc.deleteLater()
         self._tool_shortcuts.clear()
 
         for tool in self.tools:
-            if not tool.shortcut:
-                continue
-            sc = QShortcut(QKeySequence(tool.shortcut), self)
-            sc.setContext(Qt.ShortcutContext.WindowShortcut)
-            sc.activated.connect(self._make_tool_callback(tool))
-            self._tool_shortcuts.append(sc)
+            for single_sc in split_shortcuts(tool.shortcut):
+                sc = QShortcut(QKeySequence(single_sc), self)
+                sc.setContext(Qt.ShortcutContext.WindowShortcut)
+                sc.activated.connect(self._make_tool_callback(tool, single_sc))
+                self._tool_shortcuts.append(sc)
 
-    def _make_tool_callback(self, tool: ToolSpec) -> Callable[[], None]:
+    def _make_tool_callback(
+        self, tool: ToolSpec, key_str: str | None = None
+    ) -> Callable[[], None]:
         def _trigger() -> None:
-            fw = QApplication.focusWidget()
-            if (
-                isinstance(fw, QPlainTextEdit)
-                and fw is not self
-                and not fw.isReadOnly()
-                and "+" not in tool.shortcut
-            ):
-                return
+            if key_str is not None:
+                fw = QApplication.focusWidget()
+                if (
+                    isinstance(fw, QPlainTextEdit)
+                    and fw is not self
+                    and not fw.isReadOnly()
+                    and "+" not in key_str
+                ):
+                    return
             if self.on_run_tool is not None:
                 self.on_run_tool(tool)
 

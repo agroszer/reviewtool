@@ -59,6 +59,57 @@ def test_session_diff_cache_and_hide_viewed_filter(tmp_path: Path) -> None:
     assert [e.path for e in session.visible_unstaged()] == ["b.py"]
 
 
+def test_session_maintains_alphabetical_sorting_on_stage_and_unstage(
+    tmp_path: Path,
+) -> None:
+    cfg = ConfigManager(
+        config_path=tmp_path / "config.ini",
+        tools_path=tmp_path / "tools.ini",
+    )
+    cfg.load()
+
+    vcs = MagicMock(spec=VCSBackend)
+    vcs.repo_root = tmp_path
+    vcs.name = "git"
+    vcs.supports_amend = True
+    vcs.get_branch_or_info.return_value = "main"
+
+    u_a = FileEntry(path="a.py", status="M", staged=False)
+    u_b = FileEntry(path="b.py", status="M", staged=False)
+    u_c = FileEntry(path="c.py", status="M", staged=False)
+    vcs.scan_status.return_value = ([u_c, u_a, u_b], [])
+    vcs.get_diff.return_value = FileDiff(path="a.py", hunks=[])
+
+    session = ReviewSession(vcs=vcs, config=cfg)
+    session.rescan()
+    assert [e.path for e in session.unstaged] == ["a.py", "b.py", "c.py"]
+
+    vcs.scan_file_status.return_value = (
+        None,
+        FileEntry(path="c.py", status="M", staged=True),
+    )
+    session.stage_file("c.py")
+    vcs.scan_file_status.return_value = (
+        None,
+        FileEntry(path="a.py", status="M", staged=True),
+    )
+    session.stage_file("a.py")
+    vcs.scan_file_status.return_value = (
+        None,
+        FileEntry(path="b.py", status="M", staged=True),
+    )
+    session.stage_file("b.py")
+    assert [e.path for e in session.staged] == ["a.py", "b.py", "c.py"]
+
+    vcs.scan_file_status.return_value = (
+        FileEntry(path="a.py", status="M", staged=False),
+        None,
+    )
+    session.unstage_file("a.py")
+    assert [e.path for e in session.unstaged] == ["a.py"]
+    assert [e.path for e in session.staged] == ["b.py", "c.py"]
+
+
 def test_cli_frontend_selection(tmp_path: Path) -> None:
     cfg = ConfigManager(
         config_path=tmp_path / "config.ini",

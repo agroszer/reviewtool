@@ -11,6 +11,7 @@ from PyQt6.QtGui import (
     QAction,
     QCloseEvent,
     QFont,
+    QIcon,
     QKeySequence,
     QMoveEvent,
     QResizeEvent,
@@ -41,6 +42,7 @@ from reviewtool.state import ReviewSession
 from reviewtool.tools import (
     find_terminal_Launcher,
     run_tool_output,
+    split_shortcuts,
     wrap_argv_with_cd,
 )
 from reviewtool.ui_qt.dialogs import (
@@ -107,6 +109,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(
             f"reviewtool — {session.vcs.repo_root.name} ({session.vcs.name})"
         )
+        self.setWindowIcon(QIcon(str(_ICON_PATH)))
 
         self._build_ui()
         self._apply_fonts()
@@ -368,6 +371,7 @@ class MainWindow(QMainWindow):
     def _bind_global_shortcuts(self) -> None:
         for sc in self._hotkeys:
             sc.setEnabled(False)
+            sc.setKey(QKeySequence())
             sc.deleteLater()
         self._hotkeys.clear()
 
@@ -495,13 +499,16 @@ class MainWindow(QMainWindow):
             ),
         ]
         for widget, label, key_str, callback, allow_in_editor in button_bindings:
-            if key_str:
-                widget.setToolTip(f"{label} ({key_str})")
-                sc = QShortcut(QKeySequence(key_str), self)
-                sc.activated.connect(
-                    self._make_hotkey_cb(callback, key_str, allow_in_editor)
-                )
-                self._hotkeys.append(sc)
+            seqs = split_shortcuts(key_str)
+            if seqs:
+                widget.setToolTip(f"{label} ({', '.join(seqs)})")
+                for seq in seqs:
+                    sc = QShortcut(QKeySequence(seq), self)
+                    sc.setContext(Qt.ShortcutContext.WindowShortcut)
+                    sc.activated.connect(
+                        self._make_hotkey_cb(callback, seq, allow_in_editor)
+                    )
+                    self._hotkeys.append(sc)
             else:
                 widget.setToolTip(label)
 
@@ -650,6 +657,7 @@ class MainWindow(QMainWindow):
         entry = current.data(Qt.ItemDataRole.UserRole)
         if isinstance(entry, FileEntry):
             self._updating_lists = True
+            self.list_staged.setCurrentItem(None)
             self.list_staged.clearSelection()
             self._updating_lists = False
             self.session.select_entry(entry)
@@ -663,6 +671,7 @@ class MainWindow(QMainWindow):
         entry = current.data(Qt.ItemDataRole.UserRole)
         if isinstance(entry, FileEntry):
             self._updating_lists = True
+            self.list_unstaged.setCurrentItem(None)
             self.list_unstaged.clearSelection()
             self._updating_lists = False
             self.session.select_entry(entry)
@@ -746,11 +755,19 @@ class MainWindow(QMainWindow):
             self._safe_vcs_call(lambda: self.session.unstage_file(entry.path))
 
     def _on_stage_selected_file(self) -> None:
+        cur = self.session.current_entry
+        if cur is not None and not cur.staged:
+            self._safe_vcs_call(lambda: self.session.stage_file(cur.path))
+            return
         item = self.list_unstaged.currentItem()
         if item is not None:
             self._on_unstaged_double_clicked(item)
 
     def _on_unstage_selected_file(self) -> None:
+        cur = self.session.current_entry
+        if cur is not None and cur.staged:
+            self._safe_vcs_call(lambda: self.session.unstage_file(cur.path))
+            return
         item = self.list_staged.currentItem()
         if item is not None:
             self._on_staged_double_clicked(item)
