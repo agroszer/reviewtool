@@ -1,6 +1,7 @@
 """PyQt6 main application window for reviewtool."""
 
 import os
+from pathlib import Path
 import shlex
 import sys
 from typing import cast
@@ -1208,9 +1209,13 @@ class MainWindow(QMainWindow):
         self._refresh_diff_pane()
 
 
+_ICON_PATH = Path(__file__).with_name("icon.png")
+
+
 def run_qt_app(session: ReviewSession) -> int:
     """Launch the PyQt6 GUI frontend."""
     app = QApplication.instance() or QApplication(sys.argv)
+    app.setWindowIcon(QIcon(str(_ICON_PATH)))
     win = MainWindow(session)
     win.show()
     return app.exec()
